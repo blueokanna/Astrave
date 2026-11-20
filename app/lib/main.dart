@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:file_selector/file_selector.dart' as files;
 import 'package:flutter/foundation.dart'
@@ -7,6 +9,9 @@ import 'package:material_ui/material_ui.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'activity.dart';
+import 'android_profile.dart';
+import 'android_tls.dart';
 import 'certificates.dart';
 import 'design.dart';
 import 'desktop_tray.dart';
@@ -46,13 +51,16 @@ class _AstraveAppState extends State<AstraveApp> {
 
   Future<String> _initialize() async {
     await RustLib.init();
+    if (Platform.isAndroid) initializeAndroidTls();
     final dir = await getApplicationSupportDirectory();
     final path = await rust.initialize(directory: dir.path);
     chinese = await prefs.getBool('chinese') ?? chinese;
     final dark = await prefs.getBool('dark');
     if (dark != null) mode = dark ? ThemeMode.dark : ThemeMode.light;
     if (mounted) {
-      tray = DesktopTray()..install(chinese);
+      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+        tray = DesktopTray()..install(chinese);
+      }
       setState(() {});
     }
     return path;
@@ -72,6 +80,12 @@ class _AstraveAppState extends State<AstraveApp> {
       theme: desktopTheme(Brightness.light, light),
       darkTheme: desktopTheme(Brightness.dark, dark),
       themeMode: mode,
+      themeAnimationStyle: MediaQuery.disableAnimationsOf(context)
+          ? AnimationStyle.noAnimation
+          : const AnimationStyle(
+              duration: Durations.medium2,
+              curve: Easing.standard,
+            ),
       home: FutureBuilder<String>(
         future: _defaultPath,
         builder: (context, state) {
@@ -123,12 +137,12 @@ class Workspace extends StatefulWidget {
   State<Workspace> createState() => _WorkspaceState();
 }
 
-class _WorkspaceState extends State<Workspace> {
+class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   Session? session;
   String? failure;
   int page = 0;
   final editor = TextEditingController();
-  String logQuery = '';
+  final logFilter = TextEditingController();
   LocalText get t => widget.text;
   List<String> get titles => [
     t('Overview', '概览'),
@@ -146,7 +160,15 @@ class _WorkspaceState extends State<Workspace> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _open(widget.initialPath);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (Platform.isAndroid) {
+      session?.setPollingEnabled(state == AppLifecycleState.resumed);
+    }
   }
 
   Future<void> _open(String path) async {
@@ -154,7 +176,11 @@ class _WorkspaceState extends State<Workspace> {
       final profile = await rust.openProfile(path: path);
       if (!mounted) return;
       session?.dispose();
-      final next = Session(profile)..addListener(_changed);
+      final next = Session(profile);
+      if (Platform.isAndroid &&
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.paused) {
+        next.setPollingEnabled(false);
+      }
       editor.text = profile.source;
       setState(() {
         session = next;
@@ -169,10 +195,6 @@ class _WorkspaceState extends State<Workspace> {
         notice(e.toString());
       }
     }
-  }
-
-  void _changed() {
-    if (mounted) setState(() {});
   }
 
   void notice(String text) {
@@ -192,19 +214,56 @@ class _WorkspaceState extends State<Workspace> {
   }
 
   Future<void> openFile() async {
-    final file = await files.openFile(
-      acceptedTypeGroups: const [
-        files.XTypeGroup(label: 'TOML', extensions: ['toml']),
-      ],
-    );
-    if (file == null || !mounted) return;
-    final s = session;
-    if (s != null &&
-        editor.text != s.profile.source &&
-        !await confirm(context, t('Discard unsaved edits?', '放弃尚未保存的更改？'), t)) {
-      return;
+    try {
+      final s = session;
+      if (s != null &&
+          editor.text != s.profile.source &&
+          !await confirm(
+            context,
+            t('Discard unsaved edits?', '放弃尚未保存的更改？'),
+            t,
+          )) {
+        return;
+      }
+      if (!Platform.isAndroid) {
+        final file = await files.openFile(
+          acceptedTypeGroups: const [
+            files.XTypeGroup(label: 'TOML', extensions: ['toml']),
+          ],
+        );
+        if (file != null && mounted) await _open(file.path);
+        return;
+      }
+      final source = await pickAndroidProfile();
+      if (source == null || !mounted) return;
+      if (s == null) {
+        // Recover an unreadable profile using the same validated, atomic save.
+        final path = widget.initialPath;
+        if (!await confirm(
+          context,
+          t('Replace the local profile?', '替换本机配置？'),
+          t,
+        )) {
+          return;
+        }
+        await rust.saveProfile(
+          path: path,
+          original: await readProfileText(File(path)),
+          source: source,
+        );
+        await _open(path);
+      } else {
+        editor.text = source;
+        notice(
+          t(
+            'Review the imported profile, then validate and save.',
+            '请检查导入的配置，然后校验并保存。',
+          ),
+        );
+      }
+    } catch (e) {
+      notice(e.toString());
     }
-    await _open(file.path);
   }
 
   Widget profilePanel(Session s) => Column(
@@ -250,7 +309,11 @@ class _WorkspaceState extends State<Workspace> {
           ),
           OutlinedButton.icon(
             icon: const Icon(Icons.folder_open),
-            label: Text(t('Open file', '打开文件')),
+            label: Text(
+              Platform.isAndroid
+                  ? t('Import profile', '导入配置')
+                  : t('Open file', '打开文件'),
+            ),
             onPressed: s.active || s.busy ? null : openFile,
           ),
           if (s.active)
@@ -346,7 +409,7 @@ class _WorkspaceState extends State<Workspace> {
           'Uses Google Sans and HarmonyOS Sans fonts.',
           '使用 Google Sans 和 HarmonyOS Sans 字体。',
         ),
-        applicationIcon: Image.asset('assets/astrave.png', width: 40),
+        applicationIcon: const AppIcon(),
         children: [
           Text('CPU  ${usage.cpuPercent.toStringAsFixed(1)}%'),
           Text(
@@ -378,23 +441,16 @@ class _WorkspaceState extends State<Workspace> {
         onPressed: widget.theme,
         icon: const Icon(Icons.contrast),
       ),
-      PopupMenuButton<String>(
+      ActionsMenu(
         tooltip: t('More', '更多'),
-        onSelected: (v) {
-          if (v == 'about') {
-            about();
-          } else {
-            widget.hide?.call();
-          }
-        },
-        itemBuilder: (_) => [
-          PopupMenuItem(
-            value: 'about',
+        children: [
+          MenuItemButton(
+            onPressed: about,
             child: Text(t('About Astrave', '关于 Astrave')),
           ),
           if (widget.hide != null)
-            PopupMenuItem(
-              value: 'hide',
+            MenuItemButton(
+              onPressed: widget.hide,
               child: Text(t('Hide to tray', '隐藏到托盘')),
             ),
         ],
@@ -419,14 +475,6 @@ class _WorkspaceState extends State<Workspace> {
         ),
       );
     }
-    final matchingLogs = page == 2 && logQuery.isNotEmpty
-        ? [
-            for (var i = s.logs.length - 1; i >= 0; i--)
-              if (s.logs.elementAt(i).toLowerCase().contains(logQuery))
-                s.logs.elementAt(i),
-          ]
-        : null;
-    final logCount = matchingLogs?.length ?? s.logs.length;
     final heading = Row(
       children: [
         Expanded(
@@ -440,64 +488,26 @@ class _WorkspaceState extends State<Workspace> {
       ],
     );
     final panels = switch (page) {
-      0 => Overview(
-        session: s,
-        heading: heading,
-        text: t,
-        edit: () => setState(() => page = 1),
-        modify: modifyTunnel,
-        connect: () => act(() async {
-          if (s.active) {
-            await rust.stopClient();
-          } else {
-            await rust.startClient(path: s.profile.path);
-          }
-        }),
+      0 => ListenableBuilder(
+        listenable: s,
+        child: heading,
+        builder: (context, heading) => Overview(
+          session: s,
+          heading: heading,
+          text: t,
+          edit: () => setState(() => page = 1),
+          modify: modifyTunnel,
+          connect: () => act(() async {
+            if (s.active) {
+              await rust.stopClient();
+            } else {
+              await rust.startClient(path: s.profile.path);
+            }
+          }),
+        ),
       ),
-      1 => profilePanel(s),
-      2 => Column(
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: TextFormField(
-                  initialValue: logQuery,
-                  decoration: InputDecoration(
-                    labelText: t('Filter logs', '筛选日志'),
-                  ),
-                  onChanged: (value) =>
-                      setState(() => logQuery = value.toLowerCase()),
-                ),
-              ),
-              IconButton(
-                tooltip: t('Clear logs', '清空日志'),
-                onPressed: () => setState(s.logs.clear),
-                icon: const Icon(Icons.clear_all),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          logCount == 0
-              ? ListTile(
-                  leading: const Icon(Icons.subject),
-                  title: Text(t('No matching events', '暂无匹配事件')),
-                )
-              : SizedBox(
-                  height:
-                      (MediaQuery.sizeOf(context).height - (wide ? 150 : 215))
-                          .clamp(140.0, 1600.0),
-                  child: ListView.builder(
-                    itemCount: logCount,
-                    itemBuilder: (context, index) => SelectableText(
-                      matchingLogs?[index] ??
-                          s.logs.elementAt(logCount - 1 - index),
-                      style: Theme.of(context).textTheme.bodyMedium
-                          ?.copyWith(fontFamily: 'monospace', height: 1.6),
-                    ),
-                  ),
-                ),
-        ],
-      ),
+      1 => ListenableBuilder(listenable: s, builder: (_, _) => profilePanel(s)),
+      2 => ActivityPanel(logs: s.logs, filter: logFilter, text: t),
       _ => Certificates(text: t, profilePath: s.profile.path),
     };
     return Scaffold(
@@ -515,7 +525,7 @@ class _WorkspaceState extends State<Workspace> {
                   padding: const EdgeInsets.fromLTRB(16, 24, 24, 32),
                   child: Row(
                     children: [
-                      Image.asset('assets/astrave.png', width: 40),
+                      const AppIcon(),
                       const SizedBox(width: 12),
                       Text(
                         'Astrave',
@@ -584,8 +594,10 @@ class _WorkspaceState extends State<Workspace> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     session?.dispose();
     editor.dispose();
+    logFilter.dispose();
     super.dispose();
   }
 }
@@ -603,6 +615,7 @@ Future<String?> prompt(
     context: context,
     builder: (context) => AlertDialog(
       title: Text(title),
+      scrollable: true,
       content: SizedBox(
         width: 480,
         child: TextFormField(

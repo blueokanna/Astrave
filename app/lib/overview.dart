@@ -445,36 +445,29 @@ class _TunnelRow extends StatelessWidget {
                   ],
                 ),
               ),
-              PopupMenuButton<String>(
+              ActionsMenu(
                 tooltip: t('Tunnel actions', '隧道操作'),
-                itemBuilder: (_) => [
-                  PopupMenuItem(
-                    value: 'copy',
-                    enabled: !autoPort,
+                children: [
+                  MenuItemButton(
+                    onPressed: autoPort
+                        ? null
+                        : () =>
+                              Clipboard.setData(ClipboardData(text: endpoint)),
                     child: Text(
                       portOnly
                           ? t('Copy port', '复制端口')
                           : t('Copy endpoint', '复制端点'),
                     ),
                   ),
-                  PopupMenuItem(
-                    value: 'edit',
-                    enabled: edit != null,
+                  MenuItemButton(
+                    onPressed: edit == null ? null : () => edit!(false),
                     child: Text(t('Edit tunnel', '编辑隧道')),
                   ),
-                  PopupMenuItem(
-                    value: 'remove',
-                    enabled: edit != null,
+                  MenuItemButton(
+                    onPressed: edit == null ? null : () => edit!(true),
                     child: Text(t('Remove tunnel', '删除隧道')),
                   ),
                 ],
-                onSelected: (action) async {
-                  if (action == 'copy') {
-                    await Clipboard.setData(ClipboardData(text: endpoint));
-                  } else {
-                    await edit?.call(action == 'remove');
-                  }
-                },
               ),
             ],
           ),

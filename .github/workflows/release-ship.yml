@@ -99,6 +99,7 @@ jobs:
             org.opencontainers.image.version=${{ inputs.version }}
 
   publish:
+    needs: docker
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -118,6 +119,12 @@ jobs:
           pattern: desktop-*
           merge-multiple: true
 
+      - name: Download signed Android packages
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          name: android-apks
+
       - name: List artifacts
         run: find artifacts -type f | sort
 
@@ -129,7 +136,9 @@ jobs:
           draft: false
           prerelease: ${{ contains(inputs.version, '-') }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
+            artifacts/*.apk
             artifacts/*.tar.gz
             artifacts/*.dmg
             artifacts/*.zip

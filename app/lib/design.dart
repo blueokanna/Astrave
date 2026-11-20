@@ -23,6 +23,14 @@ ThemeData desktopTheme(Brightness brightness, ColorScheme? dynamicScheme) {
     fontFamily: 'GoogleSans',
     fontFamilyFallback: const ['HarmonyOSSans'],
     colorScheme: scheme,
+    pageTransitionsTheme: const PageTransitionsTheme(
+      builders: {
+        TargetPlatform.android: PredictiveBackPageTransitionsBuilder(),
+        TargetPlatform.linux: FadeForwardsPageTransitionsBuilder(),
+        TargetPlatform.windows: FadeForwardsPageTransitionsBuilder(),
+        TargetPlatform.macOS: FadeForwardsPageTransitionsBuilder(),
+      },
+    ),
     scaffoldBackgroundColor: scheme.surface,
     cardTheme: CardThemeData(
       elevation: 0,
@@ -45,8 +53,18 @@ ThemeData desktopTheme(Brightness brightness, ColorScheme? dynamicScheme) {
   );
 }
 
-/// Give the incoming page one spatial spring. The compositor moves its cached
-/// layer without rebuilding the page on each frame.
+class AppIcon extends StatelessWidget {
+  const AppIcon({super.key});
+
+  @override
+  Widget build(BuildContext context) => Image.asset(
+    'assets/astrave.png',
+    width: 40,
+    cacheWidth: (40 * MediaQuery.devicePixelRatioOf(context)).ceil(),
+  );
+}
+
+/// One vsync drives both page layers, including a reversal during navigation.
 class PageMotion extends StatefulWidget {
   const PageMotion({super.key, required this.page, required this.child});
   final int page;
@@ -57,36 +75,143 @@ class PageMotion extends StatefulWidget {
 
 class _PageMotionState extends State<PageMotion>
     with SingleTickerProviderStateMixin {
-  late final _controller = AnimationController.unbounded(vsync: this, value: 0);
+  late final _controller = AnimationController.unbounded(vsync: this, value: 1)
+    ..addStatusListener((status) {
+      if (status == AnimationStatus.completed && _previous != null) {
+        setState(() => _previous = null);
+      }
+    });
+  PageMotion? _previous;
+  double _inOffset = 0, _outOffset = 0, _outEnd = 0;
+  double _inOpacity = 1, _outOpacity = 0;
+
+  double _mix(double start, double end) =>
+      start + (end - start) * _controller.value;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _previous = null;
+      _controller.value = 1;
+    }
+  }
+
   @override
   void didUpdateWidget(PageMotion oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.page == oldWidget.page) return;
-    if (MediaQuery.disableAnimationsOf(context)) {
-      _controller.value = 0;
+    if (widget.page == oldWidget.page ||
+        MediaQuery.disableAnimationsOf(context)) {
       return;
     }
-    final start = _controller.value + (widget.page > oldWidget.page ? 24 : -24);
+    final reversing = widget.page == _previous?.page;
+    final step = widget.page > oldWidget.page ? 28.0 : -28.0;
+    final incomingOffset = reversing ? _mix(_outOffset, _outEnd) : step;
+    final incomingOpacity = reversing
+        ? _mix(_outOpacity, 0).clamp(0.0, 1.0)
+        : 0.0;
+    _outOffset = _mix(_inOffset, 0);
+    _outOpacity = _mix(_inOpacity, 1).clamp(0.0, 1.0);
+    _inOffset = incomingOffset;
+    _inOpacity = incomingOpacity;
+    _outEnd = -step;
+    _previous = oldWidget;
     _controller.animateWith(
       SpringSimulation(
         Springs.expressiveDefaultSpatial,
-        start,
         0,
-        _controller.velocity,
+        1,
+        0,
+        snapToEnd: true,
       ),
     );
   }
 
+  Widget _layer(PageMotion page, {required bool entering}) => IgnorePointer(
+    key: ValueKey(page.page),
+    ignoring: !entering,
+    child: ExcludeSemantics(
+      excluding: !entering,
+      child: ExcludeFocus(
+        excluding: !entering,
+        child: TickerMode(enabled: entering, child: page.child),
+      ),
+    ),
+  );
+
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _controller,
-    child: RepaintBoundary(child: widget.child),
-    builder: (_, child) =>
-        Transform.translate(offset: Offset(0, _controller.value), child: child),
+  Widget build(BuildContext context) => Flow(
+    delegate: _PagePainter(
+      _controller,
+      _inOffset,
+      _outOffset,
+      _outEnd,
+      _inOpacity,
+      _outOpacity,
+    ),
+    children: [
+      if (_previous case final previous?) _layer(previous, entering: false),
+      _layer(widget, entering: true),
+    ],
   );
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
   }
+}
+
+class _PagePainter extends FlowDelegate {
+  _PagePainter(
+    this.progress,
+    this.inOffset,
+    this.outOffset,
+    this.outEnd,
+    this.inOpacity,
+    this.outOpacity,
+  ) : super(repaint: progress);
+
+  final Animation<double> progress;
+  final double inOffset, outOffset, outEnd, inOpacity, outOpacity;
+
+  @override
+  void paintChildren(FlowPaintingContext context) {
+    if (context.childCount == 1) {
+      context.paintChild(0);
+      return;
+    }
+    final t = progress.value;
+    void paint(int index, double x, double opacity) => context.paintChild(
+      index,
+      transform: Matrix4.translationValues(x, 0, 0),
+      opacity: opacity.clamp(0.0, 1.0),
+    );
+    paint(0, outOffset + (outEnd - outOffset) * t, outOpacity * (1 - t));
+    paint(1, inOffset * (1 - t), inOpacity + (1 - inOpacity) * t);
+  }
+
+  @override
+  bool shouldRepaint(_PagePainter oldDelegate) =>
+      inOffset != oldDelegate.inOffset ||
+      outOffset != oldDelegate.outOffset ||
+      outEnd != oldDelegate.outEnd ||
+      inOpacity != oldDelegate.inOpacity ||
+      outOpacity != oldDelegate.outOpacity;
+}
+
+class ActionsMenu extends StatelessWidget {
+  const ActionsMenu({super.key, required this.tooltip, required this.children});
+  final String tooltip;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => MenuAnchor(
+    menuChildren: children,
+    builder: (_, controller, _) => IconButton(
+      tooltip: tooltip,
+      icon: const Icon(Icons.more_vert),
+      onPressed: () =>
+          controller.isOpen ? controller.close() : controller.open(),
+    ),
+  );
 }

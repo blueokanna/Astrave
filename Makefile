@@ -5,25 +5,25 @@ export CARGO_TARGET_DIR := $(ROOT)/target
 web: astrave-server
 
 docs:
-	cargo run --locked -p astrave-docs
+	cargo run --locked --features docs --bin astrave-docs
 
 build:
-	cargo build -p astrave-server -p astrave-client
+	cargo build --bin astrave --bin astrave-server
 
 release:
-	cargo build --release -p astrave-server -p astrave-client
+	cargo build --release --bin astrave --bin astrave-server
 	@echo ""
 	@echo "artifacts:"
 	@ls -lh target/release/astrave-server target/release/astrave
 
 astrave-server:
-	cargo build --release -p astrave-server
+	cargo build --release --bin astrave-server
 	@echo ""
 	@echo "artifact:"
 	@ls -lh target/release/astrave-server
 
 astrave:
-	cargo build --release -p astrave-client
+	cargo build --release --bin astrave
 
 FLUTTER_PLATFORM ?= $(if $(filter Windows_NT,$(OS)),windows,$(if $(filter Darwin,$(shell uname -s)),macos,linux))
 
@@ -50,7 +50,7 @@ desktop-deb: desktop-build
 	@echo "deb -> dist/astrave-desktop_*_linux_*.deb"
 
 test:
-	cargo test --workspace
+	cargo test --locked --all-features
 
 docker-context:
 	chmod +x scripts/prepare-docker-context.sh scripts/stage-docker-slice.sh

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
 NAME=""
 VERSION=""
 OS=""
@@ -67,6 +69,7 @@ case "$OS" in
 esac
 
 cp "$BIN" "${STAGE}/${DEST_BIN}"
+cp "${ROOT}/LICENSE" "${STAGE}/LICENSE"
 chmod +x "${STAGE}/${DEST_BIN}" || true
 
 if [[ -n "$CONFIG" ]]; then

@@ -44,11 +44,40 @@ Throughput ranged from 399.4 to 410.9 MiB/s before and 419.8 to 454.5 MiB/s afte
 
 The six original JSON lines are in `docs/benchmarks/traffic-history-windows-before.jsonl` and `docs/benchmarks/traffic-history-windows-after.jsonl` in the source tree.
 
+## Six-package and single-package Release builds
+
+On 21 November 2026 the same Windows host ran the 128-tunnel workload above after the APK build finished and the Android emulator exited. The order was old, new, new, old, old, new. Each trial transferred and verified 512 MiB over loopback. Both builds already contained the TCP buffer and lazy history changes.
+
+| Median of three trials | Six packages | Single package |
+| --- | ---: | ---: |
+| Verified duplex throughput | 239.3 MiB/s | 223.8 MiB/s |
+| Client working set / private bytes | 11.82 / 6.79 MiB | 11.80 / 6.82 MiB |
+| Server working set / private bytes | 12.90 / 7.77 MiB | 13.02 / 7.95 MiB |
+| System overview p50 / p95 | 289 / 418 µs | 307 / 446 µs |
+| Filtered tunnel page p50 / p95 | 409 / 675 µs | 423 / 589 µs |
+| Client page p50 / p95 | 302 / 401 µs | 302 / 452 µs |
+
+The new build’s median throughput was 6.5% lower in this batch. Individual trials ranged from 228.0 to 241.3 MiB/s on the old build and from 195.0 to 227.8 MiB/s on the new build. Several source and dependency changes landed together, so the comparison cannot isolate the cost of package layout. The six samples are in `docs/benchmarks/single-package-windows-before.jsonl` and `docs/benchmarks/single-package-windows-after.jsonl`.
+
+## Memory with 16 KiB relay buffers
+
+Each active TCP relay now requests 16 KiB per direction, saving 32 KiB across both directions per process. The client also reuses the tunnel entries prepared for registration and the server shares its configuration across sessions. Both sides of this comparison used a single Cargo package. The same Windows host repeated the 128-tunnel workload described above with 64 warmed connections and six interleaved trials.
+
+| Median of three trials | Previous build | Current build |
+| --- | ---: | ---: |
+| Client working set / private bytes | 11.80 / 6.81 MiB | 10.01 / 5.18 MiB |
+| Server working set / private bytes | 12.96 / 7.82 MiB | 10.99 / 5.95 MiB |
+| Verified duplex throughput | 363.3 MiB/s | 392.9 MiB/s |
+
+The working sets fell in all three trials. Throughput ranged from 342.6 to 420.3 MiB/s before the change and from 387.2 to 413.3 MiB/s after it. The ranges overlap. The samples, including per-trial API timings, are in `docs/benchmarks/flat-windows-memory.jsonl`.
+
 ## Time and space costs
 
 | Operation | Time | Auxiliary space and limits |
 | --- | --- | --- |
-| TCP relay, `N` transferred bytes | O(N) | Two 32 KiB copy buffers per relay per process, previously two 256 KiB buffers. Kernel, TLS and multiplexing buffers are additional. |
+| Control frame with `B` body bytes | O(B) framing and decoding for fixed schema depth. Draining completed data tasks preserves the partially read frame. | One reusable read buffer per reader. Body limits are 4 MiB on control streams and 128 KiB on UDP streams. |
+| Login replay detection | Expected O(1) insertion plus O(E) for `E` expired digests removed by this login. Each digest expires once. | Up to 100,000 distinct 32-byte digests, stored in a hash set and an ordered expiry queue. |
+| TCP relay, `N` transferred bytes | O(N) | Two 16 KiB copy buffers per relay per process. Kernel, TLS and multiplexing buffers are additional. |
 | UDP forwarding, `B` bytes and `P` local peers | O(B) per forwarded datagram, expected O(1) peer lookup | O(P × receive-buffer size + queue slots × payload size). Up to 1,024 peers per forwarder. Each channel has at most 1,024 slots and about 2 MiB of payload capacity, plus metadata. Full outbound queues drop before copying. |
 | Data connection pool | Expected O(1) enqueue/dequeue | Space proportional to pool capacity plus waiting tasks. A new stream wakes one waiter. Shutdown wakes all. |
 | Config diff, `A` old tunnels, `B` new, `D` changes | Expected O(A+B+D log D) with bounded field lengths | O(A+D) for the old-name index and sorted changes. |
@@ -65,9 +94,9 @@ With 500 existing lines, a Dart microbenchmark measured 100,000 evictions and ap
 ## Reproduce
 
 ```sh
-cargo build --locked --release -p astrave-client -p astrave-server
+cargo build --locked --release --bin astrave --bin astrave-server
 dart scripts/benchmark.dart target/release
 dart scripts/benchmark.dart --logs
 ```
 
-Pass the directory containing the saved older binaries to the same script to measure the baseline. Each run creates fresh loopback ports and configs, verifies echo contents and checks the first name on the fourth tunnel page. The process memory sampler runs on Windows.
+Pass two binary directories to `dart scripts/benchmark.dart OLD_DIRECTORY NEW_DIRECTORY` to run six trials in the order old, new, new, old, old, new. Each output row includes its build label. Each trial uses fresh loopback ports and configs, verifies echo contents and checks the first name on the fourth tunnel page. The process memory sampler runs on Windows.

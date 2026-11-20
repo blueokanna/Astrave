@@ -194,11 +194,26 @@ Future<void> main(List<String> args) async {
     benchmarkLogs();
     return;
   }
-  if (args.length != 1)
-    throw ArgumentError('Usage: dart scripts/benchmark.dart RELEASE_DIRECTORY');
-  final binaries = Directory(args.single).absolute;
+  if (args.length == 2) {
+    final before = Directory(args[0]).absolute;
+    final after = Directory(args[1]).absolute;
+    for (final baseline in [true, false, false, true, true, false]) {
+      stdout.writeln(
+        jsonEncode({
+          'build': baseline ? 'before' : 'after',
+          ...await runTrial(baseline ? before : after),
+        }),
+      );
+    }
+    return;
+  }
+  if (args.length != 1) {
+    throw ArgumentError(
+      'Usage: dart scripts/benchmark.dart RELEASE_DIRECTORY [NEW_RELEASE_DIRECTORY]',
+    );
+  }
   for (var i = 0; i < 3; i++) {
-    stdout.writeln(jsonEncode(await runTrial(binaries)));
+    stdout.writeln(jsonEncode(await runTrial(Directory(args.single).absolute)));
   }
 }
 

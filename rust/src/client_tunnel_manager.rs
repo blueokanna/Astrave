@@ -1,0 +1,340 @@
+use super::udp::run_udp_session;
+use crate::client::plugin::{self, ConnectionInfo, Plugin, PluginContext};
+use crate::core::config::{ClientConfig, TunnelConfig};
+use crate::core::io;
+use crate::core::limit::{self, BandwidthLimitSide, BandwidthLimiter, maybe_limit};
+use crate::core::msg::StartDataConn;
+use crate::core::net::{
+    TcpKeepaliveConfig, addrs_from_start_data_conn, build_proxy_protocol_header,
+    parse_proxy_protocol_version,
+};
+use crate::core::transport::DynStream;
+use anyhow::{Result, anyhow};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock};
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
+use tokio::sync::oneshot;
+
+struct TunnelEntry {
+    name: String,
+    protocol: String,
+    host: String,
+    port: u16,
+    limiter: Option<Arc<BandwidthLimiter>>,
+    plugin: Option<Arc<dyn Plugin>>,
+    proxy_protocol: Option<&'static str>,
+    tcp_keepalive: TcpKeepaliveConfig,
+    udp_cancel: Mutex<Option<oneshot::Sender<()>>>,
+}
+
+pub struct TunnelManager {
+    by_name: RwLock<HashMap<String, Arc<TunnelEntry>>>,
+    udp_packet_size: usize,
+    tcp_keepalive: TcpKeepaliveConfig,
+}
+
+impl TunnelManager {
+    pub fn from_config(cfg: &ClientConfig) -> Result<Self> {
+        let mgr = Self {
+            by_name: RwLock::new(HashMap::with_capacity(cfg.tunnels.len())),
+            udp_packet_size: cfg.udp_packet_size.max(512),
+            tcp_keepalive: cfg.transport.tcp_keepalive(),
+        };
+        for t in &cfg.tunnels {
+            mgr.upsert(t)?;
+        }
+        Ok(mgr)
+    }
+
+    pub fn upsert(&self, tunnel: &TunnelConfig) -> Result<()> {
+        let entry = build_entry(tunnel, self.tcp_keepalive)?;
+        self.by_name
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(tunnel.name.clone(), entry);
+        Ok(())
+    }
+
+    pub fn remove(&self, name: &str) {
+        if let Some(entry) = self
+            .by_name
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(name)
+        {
+            cancel_udp_sync(&entry);
+        }
+    }
+
+    pub fn tunnel_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .by_name
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .cloned()
+            .collect();
+        names.sort();
+        names
+    }
+
+    pub async fn handle_data_conn(
+        &self,
+        start: &StartDataConn,
+        data: DynStream,
+        codec: crate::core::msg::Codec,
+    ) -> Result<()> {
+        let entry = self
+            .by_name
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&start.tunnel_name)
+            .cloned()
+            .ok_or_else(|| anyhow!("unknown tunnel: {}", start.tunnel_name))?;
+        let udp_packet_size = self.udp_packet_size;
+        serve_entry(entry, udp_packet_size, start, data, codec).await
+    }
+
+    async fn handle_stream(
+        entry: &Arc<TunnelEntry>,
+        start: &StartDataConn,
+        data: DynStream,
+    ) -> Result<()> {
+        let data = maybe_limit(data, entry.limiter.clone());
+
+        if let Some(ref plugin) = entry.plugin {
+            tracing::debug!(
+                tunnel = %entry.name,
+                plugin = plugin.name(),
+                "handle by plugin"
+            );
+            return plugin
+                .handle(ConnectionInfo {
+                    stream: data,
+                    src_addr: start.src_addr.clone(),
+                    src_port: start.src_port,
+                    dst_addr: start.dst_addr.clone(),
+                    dst_port: start.dst_port,
+                })
+                .await;
+        }
+
+        let (svc_host, svc_port) = (&entry.host, entry.port);
+        if svc_host.trim().is_empty() || svc_port == 0 {
+            return Err(anyhow!(
+                "tunnel {} has empty or invalid service (local backend)",
+                entry.name
+            ));
+        }
+        let local_addr = crate::core::net::resolve_socket_addr(svc_host, svc_port)
+            .await
+            .map_err(|e| {
+                anyhow!(
+                    "resolve local service {svc_host}:{svc_port} for tunnel {}: {e}",
+                    entry.name
+                )
+            })?;
+        let local = TcpStream::connect(local_addr)
+            .await
+            .map_err(|e| anyhow!("dial local {} for tunnel {}: {}", local_addr, entry.name, e))?;
+        crate::core::net::tune_tcp_stream(&local, entry.tcp_keepalive);
+        let mut local = local;
+
+        if let Some(ver) = entry.proxy_protocol {
+            if let Some((src, dst)) = addrs_from_start_data_conn(
+                &start.src_addr,
+                start.src_port,
+                &start.dst_addr,
+                start.dst_port,
+                svc_port,
+            ) {
+                let hdr = build_proxy_protocol_header(src, dst, ver)?;
+                local.write_all(&hdr).await?;
+                tracing::debug!(
+                    tunnel = %entry.name,
+                    version = ver,
+                    %src,
+                    %dst,
+                    "wrote PROXY Protocol header to local"
+                );
+            } else {
+                tracing::debug!(
+                    tunnel = %entry.name,
+                    "PROXY Protocol configured but StartDataConn src empty; skip"
+                );
+            }
+        }
+
+        tracing::debug!(
+            tunnel = %entry.name,
+            %local_addr,
+            host = %svc_host,
+            limited = entry.limiter.is_some(),
+            "joining data <-> local"
+        );
+        if let Err(e) = io::join(data, local).await {
+            tracing::debug!(error = %e, "join ended");
+        }
+        Ok(())
+    }
+
+    async fn handle_udp(
+        entry: Arc<TunnelEntry>,
+        udp_packet_size: usize,
+        data: DynStream,
+        codec: crate::core::msg::Codec,
+    ) -> Result<()> {
+        let local_addr: std::net::SocketAddr =
+            crate::core::net::resolve_socket_addr(&entry.host, entry.port)
+                .await
+                .map_err(|e| {
+                    anyhow!(
+                        "resolve local udp service {}:{}: {e}",
+                        entry.host,
+                        entry.port
+                    )
+                })?;
+
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        {
+            let mut slot = entry.udp_cancel.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(old) = slot.take() {
+                let _ = old.send(());
+            }
+            *slot = Some(cancel_tx);
+        }
+
+        tracing::info!(
+            tunnel = %entry.name,
+            %local_addr,
+            "udp data conn; starting forwarder"
+        );
+
+        let data = maybe_limit(data, entry.limiter.clone());
+
+        run_udp_session(
+            data,
+            local_addr,
+            udp_packet_size,
+            entry.proxy_protocol.map(|s| s.to_string()),
+            cancel_rx,
+            codec,
+        )
+        .await
+    }
+}
+
+async fn serve_entry(
+    entry: Arc<TunnelEntry>,
+    udp_packet_size: usize,
+    start: &StartDataConn,
+    data: DynStream,
+    codec: crate::core::msg::Codec,
+) -> Result<()> {
+    match entry.protocol.as_str() {
+        "udp" => TunnelManager::handle_udp(entry, udp_packet_size, data, codec).await,
+        "tcp" | "http" | "https" => TunnelManager::handle_stream(&entry, start, data).await,
+        other => Err(anyhow!(
+            "unsupported tunnel protocol on data conn: {} ({})",
+            other,
+            entry.name
+        )),
+    }
+}
+
+fn build_entry(
+    tunnel: &TunnelConfig,
+    tcp_keepalive: TcpKeepaliveConfig,
+) -> Result<Arc<TunnelEntry>> {
+    let limiter = limit::limiter_if_side(
+        tunnel.transport.bandwidth,
+        &tunnel.transport.bandwidth_limit_side,
+        BandwidthLimitSide::Client,
+    )
+    .unwrap_or_else(|e| {
+        tracing::warn!(
+            tunnel = %tunnel.name,
+            error = %e,
+            "invalid bandwidth; ignoring"
+        );
+        None
+    });
+    if let Some(ref l) = limiter {
+        tracing::info!(
+            tunnel = %tunnel.name,
+            mbps = tunnel.transport.bandwidth,
+            bytes_per_sec = l.bytes_per_sec(),
+            side = "client",
+            "bandwidth limit enabled"
+        );
+    }
+
+    let plugin = if let Some(ref pc) = tunnel.plugin {
+        if pc.plugin_type.is_empty() {
+            None
+        } else {
+            let cn = pick_cert_common_name(&tunnel.domains, &tunnel.name);
+            let ctx = PluginContext {
+                name: tunnel.name.clone(),
+                cert_common_name: cn,
+                tcp_keepalive,
+            };
+            Some(plugin::create(ctx, pc)?)
+        }
+    } else {
+        None
+    };
+
+    let proxy_protocol = parse_proxy_protocol_version(&tunnel.transport.proxy_protocol_version)?;
+    if let Some(ver) = proxy_protocol {
+        tracing::info!(
+            tunnel = %tunnel.name,
+            version = ver,
+            "PROXY Protocol enabled (client writes header to local)"
+        );
+    }
+
+    let (host, port) = tunnel.service_host_port()?;
+    Ok(Arc::new(TunnelEntry {
+        name: tunnel.name.clone(),
+        protocol: tunnel.protocol.clone(),
+        host,
+        port,
+        limiter,
+        plugin,
+        proxy_protocol,
+        tcp_keepalive,
+        udp_cancel: Mutex::new(None),
+    }))
+}
+
+fn cancel_udp_sync(entry: &TunnelEntry) {
+    if let Some(tx) = entry
+        .udp_cancel
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    {
+        let _ = tx.send(());
+    }
+}
+
+fn pick_cert_common_name(domains: &[String], tunnel_name: &str) -> String {
+    for d in domains {
+        let d = d.trim();
+        if d.is_empty() {
+            continue;
+        }
+        if d.contains('.') && !d.contains('*') {
+            return d.to_ascii_lowercase();
+        }
+    }
+    for d in domains {
+        let d = d.trim();
+        if !d.is_empty() {
+            return d.to_ascii_lowercase();
+        }
+    }
+    tunnel_name.trim().to_ascii_lowercase()
+}

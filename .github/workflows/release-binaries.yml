@@ -50,7 +50,7 @@ jobs:
             target: x86_64-apple-darwin
             goos: darwin
             goarch: amd64
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             goos: darwin
             goarch: arm64
@@ -86,7 +86,7 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
         run: |
           cargo build --release --locked \
-            -p astrave-server -p astrave-client \
+            --bin astrave --bin astrave-server \
             --target ${{ matrix.target }}
 
       - name: Install UPX (Linux musl)
@@ -220,7 +220,7 @@ jobs:
               . "$HOME/.cargo/env"
             fi
 
-            cargo build --release --locked -p astrave-server -p astrave-client
+            cargo build --release --locked --bin astrave --bin astrave-server
             ./target/release/astrave-server --help >/dev/null
             ./target/release/astrave --help >/dev/null
 

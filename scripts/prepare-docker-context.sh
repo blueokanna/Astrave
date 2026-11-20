@@ -58,7 +58,7 @@ if [[ "$BUILD" -eq 1 ]]; then
   export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
   export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
   cd "$ROOT"
-  cargo build --release --locked -p astrave-server -p astrave-client --target "$TARGET"
+  cargo build --release --locked --bin astrave --bin astrave-server --target "$TARGET"
 fi
 
 [[ -d "$BIN_DIR" ]] || {

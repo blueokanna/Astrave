@@ -47,16 +47,17 @@ class _CertificatesState extends State<Certificates> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  DropdownButtonFormField<String>(
-                    initialValue: vendor,
-                    decoration: InputDecoration(
-                      labelText: t('Provider', '服务商'),
-                    ),
-                    items: [
+                  DropdownMenu<String>(
+                    expandedInsets: EdgeInsets.zero,
+                    initialSelection: vendor,
+                    label: Text(t('Provider', '服务商')),
+                    dropdownMenuEntries: [
                       for (final v in ['cloudflare', 'aliyun', 'tencent'])
-                        DropdownMenuItem(value: v, child: Text(v)),
+                        DropdownMenuEntry(value: v, label: v),
                     ],
-                    onChanged: (v) => update(() => vendor = v!),
+                    onSelected: (v) {
+                      if (v != null) update(() => vendor = v);
+                    },
                   ),
                   const SizedBox(height: 12),
                   TextFormField(

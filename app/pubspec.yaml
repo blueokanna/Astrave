@@ -1,5 +1,5 @@
 name: astrave_desktop
-description: Material desktop client for the Astrave reverse tunnel.
+description: Flutter client for Astrave on Android, Windows, Linux and macOS.
 publish_to: none
 version: 1.0.0+1
 
@@ -13,8 +13,11 @@ dependencies:
   material_ui: ^1.11.1
   flutter_rust_bridge: 2.13.0
   flutter_rust_bridge_hooks: 2.13.0
+  jni: ^1.2.1
+  jni_flutter: ^1.1.0
   path_provider: ^2.1.6
   file_selector: ^1.1.0
+  android_file_picker: ^2.2.0
   tray_manager: ^0.8.3
   window_manager: ^0.6.0
   shared_preferences: ^2.5.6

@@ -21,7 +21,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$VERSION" ]]; then
-  package_id="$(cargo pkgid --manifest-path "${ROOT}/Cargo.toml" -p astrave-desktop)"
+  package_id="$(cargo pkgid --manifest-path "${ROOT}/Cargo.toml" -p astrave)"
   VERSION="${package_id##*@}"
   VERSION="${VERSION##*#}"
 fi

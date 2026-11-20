@@ -19,7 +19,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$VERSION" ]]; then
-  package_id="$(cargo pkgid --manifest-path "${ROOT}/Cargo.toml" -p astrave-desktop)"
+  package_id="$(cargo pkgid --manifest-path "${ROOT}/Cargo.toml" -p astrave)"
   VERSION="${package_id##*@}"
   VERSION="${VERSION##*#}"
 fi
@@ -44,10 +44,10 @@ if [[ ! -f "$BIN" ]]; then
   exit 1
 fi
 
-ICON128="${ROOT}/desktop/assets/app-icons/128x128.png"
-ICON64="${ROOT}/desktop/assets/app-icons/64x64.png"
-ICON32="${ROOT}/desktop/assets/app-icons/32x32.png"
-DESKTOP_SRC="${ROOT}/desktop/linux/astrave-desktop.desktop"
+ICON128="${ROOT}/app/linux/icons/128x128.png"
+ICON64="${ROOT}/app/linux/icons/64x64.png"
+ICON32="${ROOT}/app/linux/icons/32x32.png"
+DESKTOP_SRC="${ROOT}/app/linux/astrave-desktop.desktop"
 
 mkdir -p "$OUTDIR"
 OUTDIR="$(cd "$OUTDIR" && pwd)"
