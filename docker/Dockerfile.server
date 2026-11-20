@@ -1,0 +1,21 @@
+FROM alpine:3.21 AS pick
+
+ARG TARGETPLATFORM
+COPY docker_context /tmp/artifacts
+WORKDIR /tmp/output
+RUN set -eux; \
+    case "$TARGETPLATFORM" in \
+      linux/amd64) ARCH=amd64 ;; \
+      linux/arm64) ARCH=arm64 ;; \
+      *) echo "Unsupported architecture: $TARGETPLATFORM"; exit 1 ;; \
+    esac; \
+    cp "/tmp/artifacts/astrave-server-linux-${ARCH}/astrave-server" .
+
+FROM alpine:3.21
+
+RUN apk add --no-cache ca-certificates tini
+COPY --from=pick --chmod=755 /tmp/output/astrave-server /usr/local/bin/astrave-server
+COPY docker/conf/astrave-server.toml /etc/astrave/astrave-server.toml
+EXPOSE 9527/tcp 9527/udp 9528/udp 80/tcp 443/tcp 8020/tcp
+ENTRYPOINT ["/sbin/tini", "--", "astrave-server"]
+CMD ["-c", "/etc/astrave/astrave-server.toml"]

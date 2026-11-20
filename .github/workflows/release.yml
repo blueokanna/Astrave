@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Resolve version
+        id: ver
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            V="$INPUT_VERSION"
+          else
+            V="${GITHUB_REF_NAME#v}"
+          fi
+          if [ -z "$V" ]; then
+            echo "version is empty" >&2
+            exit 1
+          fi
+          package_id="$(cargo pkgid -p astrave-server)"
+          CARGO_V="${package_id##*@}"
+          CARGO_V="${CARGO_V##*#}"
+          if [ "$CARGO_V" != "$V" ]; then
+            echo "version mismatch: release=$V workspace=$CARGO_V" >&2
+            echo "update [workspace.package] version in Cargo.toml before tagging/releasing" >&2
+            exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Release version: $V (matches Cargo workspace)"
+
+  binaries:
+    needs: meta
+    uses: ./.github/workflows/release-binaries.yml
+    with:
+      version: ${{ needs.meta.outputs.version }}
+    secrets: inherit
+
+  desktop:
+    needs: meta
+    uses: ./.github/workflows/release-desktop.yml
+    with:
+      version: ${{ needs.meta.outputs.version }}
+    secrets: inherit
+
+  ship:
+    needs: [meta, binaries, desktop]
+    uses: ./.github/workflows/release-ship.yml
+    with:
+      version: ${{ needs.meta.outputs.version }}
+    secrets: inherit

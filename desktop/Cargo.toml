@@ -1,0 +1,45 @@
+[package]
+name = "astrave-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Native client runtime for Astrave Desktop"
+
+[lib]
+name = "astrave_desktop"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+astrave-client.workspace = true
+astrave-core.workspace = true
+nextjson.workspace = true
+flutter_rust_bridge = "=2.13.0"
+tzcraft.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+toml_edit = "0.25"
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+hex.workspace = true
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+instant-acme = { version = "0.8.5", default-features = false, features = ["hyper-rustls", "ring"] }
+sha1 = "0.11"
+percent-encoding = "2"
+rustls.workspace = true
+x509-parser = "0.18"
+tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

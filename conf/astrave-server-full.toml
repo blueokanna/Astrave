@@ -1,0 +1,46 @@
+listen = "0.0.0.0:9527"
+
+quicPort = 9528
+kcpPort = 9529
+
+httpGwPort = 80
+httpsGwPort = 443
+rootDomain = "example.com"
+
+proxyAddr = "0.0.0.0"
+udpPacketSize = 1500
+
+[auth]
+type = "token"
+token = "YOUR_TOKEN"
+
+[transport]
+tcpMux = true
+muxKeepaliveSecs = 30
+tcpKeepaliveIdle = 30
+tcpKeepaliveInterval = 10
+maxConnPool = 10
+heartbeatTimeout = 90
+wsPath = "/ws"
+
+[transport.quic]
+keepalivePeriod = 10
+maxIdleTimeout = 30
+maxIncomingStreams = 100000
+
+[transport.tls]
+force = true
+certFile = "./certs/server.crt"
+keyFile = "./certs/server.key"
+trustedCaFile = "./certs/ca.crt"
+
+[dashboard]
+addr = "127.0.0.1"
+port = 8020
+user = "admin"
+password = "{{env.ASTRAVE_DASHBOARD_PASSWORD}}"
+
+[log]
+file = "./astrave-server.log"
+level = "info"
+maxDays = 3

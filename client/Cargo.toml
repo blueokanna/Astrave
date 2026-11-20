@@ -1,0 +1,31 @@
+[package]
+name = "astrave-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Astrave client library and CLI"
+
+[lib]
+name = "astrave_client"
+path = "src/lib.rs"
+
+[[bin]]
+name = "astrave"
+path = "src/main.rs"
+
+[dependencies]
+astrave-core = { workspace = true }
+nextjson.workspace = true
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+async-trait = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+httparse = { workspace = true }
+hostname = { workspace = true }
+fast-socks5 = "1.0"

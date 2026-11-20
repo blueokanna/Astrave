@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Astrave Desktop
+GenericName=Intranet Penetration Client
+Comment=Astrave desktop client
+Exec=astrave-desktop
+Icon=astrave-desktop
+Terminal=false
+Categories=Network;Utility;
+StartupNotify=true
+Keywords=astrave;tunnel;

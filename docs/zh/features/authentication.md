@@ -1,0 +1,36 @@
+---
+sidebar_position: 1
+sidebar_label: 身份认证
+title: 身份认证
+---
+
+# 身份认证
+
+客户端连接服务端时的 Token 鉴权。服务端未配置 `token`（或为空）时不校验。
+
+服务端开启鉴权后，两端 `token` 必须一致，否则登录失败。Token 从配置文件读取，也可用环境变量注入，见 [环境变量](./env.md)。
+
+> 登录时用 token 计算摘要，不会把 token 明文发给服务端!
+## 示例
+
+服务端：
+
+```toml
+# astrave-server.toml
+[auth]
+token = "YOUR_TOKEN"
+```
+
+客户端：
+
+```toml
+# astrave.toml
+[auth]
+token = "YOUR_TOKEN"
+```
+
+## 参数
+
+| 参数           | 必填 | 默认值 | 说明                     |
+|--------------|----|-----|------------------------|
+| `auth.token` | 否  |     | 共享密钥；服务端为空表示关闭鉴权；两端需一致 |

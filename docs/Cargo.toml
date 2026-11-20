@@ -1,0 +1,15 @@
+[package]
+name = "astrave-docs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+courierust.workspace = true
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+rustls.workspace = true
+serde.workspace = true
+tokio.workspace = true

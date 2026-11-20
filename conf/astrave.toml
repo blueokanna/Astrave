@@ -1,0 +1,11 @@
+# Loopback development profile, paired with astrave-server.toml.
+server = "127.0.0.1:9527"
+
+[transport.tls]
+enable = false
+
+[[tunnels]]
+name = "local-http"
+protocol = "tcp"
+service = "127.0.0.1:8000"
+remotePort = 9000
