@@ -73,6 +73,16 @@ The working sets fell in all three trials. Throughput ranged from 342.6 to 420.3
 
 The Android comparison was designed to measure application PSS on one API 33 x86_64 emulator for each APK, first while disconnected and then with 32 active TLS connections. The emulator reached the echo service, but its package manager returned `Broken pipe (32)` while installing the baseline APK. The activity service then became unavailable. The run yielded no paired PSS samples, so the change in Android process memory remains unmeasured.
 
+## UDP memory and transport loss recovery
+
+On 21 November 2026, each Windows x64 trial opened 256 distinct UDP peers on one tunnel. Each peer sent and verified a 256-byte echo before sampling the native client. Both programs used the maximum `udpPacketSize` of 65,535 bytes and TCP multiplexing. Across three interleaved trials per build, the median client working set fell from 23.83 to 7.99 MiB and private bytes from 18.75 to 2.83 MiB. The baseline was the Windows release build from commit `b29fe81`. The default packet size is 1,500 bytes, so the former per-peer allocation is smaller under the default configuration. See `docs/benchmarks/udp-peers-windows.jsonl`.
+
+The client now reads ready UDP sockets into one scratch buffer per participating runtime thread. A queued reply owns its payload before the thread yields. The Rust forwarding processes run without a tracing garbage collector. The Flutter interface uses the Dart runtime and has its own garbage collector.
+
+The separate TCP throughput test used the 128-tunnel, 64-connection workload above. Median verified duplex throughput was 289.8 MiB/s for the baseline and 277.4 MiB/s for the candidate. The ranges were 207.1–289.9 and 270.0–297.7 MiB/s, respectively. This comparison establishes a UDP memory saving and leaves a TCP speed advantage unproven. The six samples are in `docs/benchmarks/forwarding-windows.jsonl`.
+
+The loopback integration check uses a fresh CA and requires a client certificate. For KCP and QUIC it drops every twentieth UDP datagram independently in each direction, transfers 256 KiB through a TCP echo tunnel, and compares every returned byte. On this Windows host, QUIC recovered with 11 of 235 datagrams dropped in each direction. KCP recovered with 24 of 484 outbound and 24 of 496 inbound datagrams dropped. These figures cover periodic loss on loopback. The test also exercises HTTP path routing, HTTPS SNI passthrough, TLS termination on the client, authenticated SOCKS5 CONNECT, UDP echo, configuration reload and dashboard authentication.
+
 ## Time and space costs
 
 | Operation | Time | Auxiliary space and limits |
@@ -80,7 +90,8 @@ The Android comparison was designed to measure application PSS on one API 33 x86
 | Control frame with `B` body bytes | O(B) framing and decoding for fixed schema depth. Draining completed data tasks preserves the partially read frame. | One reusable read buffer per reader. Body limits are 4 MiB on control streams and 128 KiB on UDP streams. |
 | Login replay detection | Expected O(1) insertion plus O(E) for `E` expired digests removed by this login. Each digest expires once. | Up to 100,000 distinct 32-byte digests, stored in a hash set and an ordered expiry queue. |
 | TCP relay, `N` transferred bytes | O(N) | Two 16 KiB copy buffers per relay per process. Kernel, TLS and multiplexing buffers are additional. |
-| UDP forwarding, `B` bytes and `P` local peers | O(B) per forwarded datagram, expected O(1) peer lookup | O(P × receive-buffer size + queue slots × payload size). Up to 1,024 peers per forwarder. Each channel has at most 1,024 slots and about 2 MiB of payload capacity, plus metadata. Full outbound queues drop before copying. |
+| UDP forwarding, `B` bytes and `P` local peers | O(B) per forwarded datagram, expected O(1) peer lookup | O(P) peer state plus one scratch buffer per receiving runtime thread and queued payloads. Up to 1,024 peers per forwarder. Each channel has at most 1,024 slots and about 2 MiB of payload capacity, plus metadata. Full outbound queues drop before copying. |
+| HTTP gateway, `R` paths for one host | One ordered predecessor lookup per candidate prefix, O(log R) key comparisons per lookup. A miss shortens the probe to its common prefix with the predecessor. | One key and shared pointer per registered location. One immutable configuration per tunnel, shared across domains and concurrent requests. |
 | Data connection pool | Expected O(1) enqueue/dequeue | Space proportional to pool capacity plus waiting tasks. A new stream wakes one waiter. Shutdown wakes all. |
 | Config diff, `A` old tunnels, `B` new, `D` changes | Expected O(A+B+D log D) with bounded field lengths | O(A+D) for the old-name index and sorted changes. |
 | Tunnel registration and lookup, `T` registered names | O(log T) name comparisons | O(T) registry. Maintaining name order moves sorting work out of each page request. |
@@ -99,6 +110,8 @@ With 500 existing lines, a Dart microbenchmark measured 100,000 evictions and ap
 cargo build --locked --release --bin astrave --bin astrave-server
 dart scripts/benchmark.dart target/release
 dart scripts/benchmark.dart --logs
+dart scripts/udp-benchmark.dart OLD_DIRECTORY NEW_DIRECTORY
+python scripts/check-tunnels.py target/release
 ```
 
 Pass two binary directories to `dart scripts/benchmark.dart OLD_DIRECTORY NEW_DIRECTORY` to run six trials in the order old, new, new, old, old, new. Each output row includes its build label. Each trial uses fresh loopback ports and configs, verifies echo contents and checks the first name on the fourth tunnel page. The process memory sampler runs on Windows.

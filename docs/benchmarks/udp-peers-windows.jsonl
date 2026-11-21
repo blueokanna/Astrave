@@ -1,0 +1,6 @@
+{"build":"before","peers":256,"configuredDatagramBytes":65535,"client":{"WorkingSet64":24985600,"PrivateMemorySize64":19656704}}
+{"build":"after","peers":256,"configuredDatagramBytes":65535,"client":{"WorkingSet64":8409088,"PrivateMemorySize64":2981888}}
+{"build":"after","peers":256,"configuredDatagramBytes":65535,"client":{"WorkingSet64":8376320,"PrivateMemorySize64":2957312}}
+{"build":"before","peers":256,"configuredDatagramBytes":65535,"client":{"WorkingSet64":25001984,"PrivateMemorySize64":19673088}}
+{"build":"before","peers":256,"configuredDatagramBytes":65535,"client":{"WorkingSet64":24981504,"PrivateMemorySize64":19623936}}
+{"build":"after","peers":256,"configuredDatagramBytes":65535,"client":{"WorkingSet64":8380416,"PrivateMemorySize64":2965504}}

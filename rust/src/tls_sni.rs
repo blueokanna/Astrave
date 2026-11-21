@@ -38,7 +38,8 @@ pub async fn peek_client_hello_sni<R: AsyncRead + Unpin>(
     }
 
     while buf.len() < need {
-        let n = reader.read(&mut tmp).await?;
+        let limit = tmp.len().min(need - buf.len());
+        let n = reader.read(&mut tmp[..limit]).await?;
         if n == 0 {
             bail!("connection closed mid ClientHello");
         }
@@ -48,12 +49,9 @@ pub async fn peek_client_hello_sni<R: AsyncRead + Unpin>(
         }
     }
 
-    let (record, rest) = buf.split_at(need);
-    let sni = extract_sni_from_handshake_record(record)
+    let sni = extract_sni_from_handshake_record(&buf[..need])
         .ok_or_else(|| anyhow!("TLS ClientHello missing SNI"))?;
-    let mut prefix = record.to_vec();
-    prefix.extend_from_slice(rest);
-    Ok((sni, prefix))
+    Ok((sni, buf))
 }
 
 fn extract_sni_from_handshake_record(record: &[u8]) -> Option<String> {
@@ -107,6 +105,10 @@ impl<S: AsyncRead + Unpin> AsyncRead for PrefixedStream<S> {
             let n = remain.len().min(buf.remaining());
             buf.put_slice(&remain[..n]);
             this.pos += n;
+            if this.pos == this.prefix.len() {
+                this.prefix = Vec::new();
+                this.pos = 0;
+            }
             return Poll::Ready(Ok(()));
         }
         Pin::new(&mut this.inner).poll_read(cx, buf)

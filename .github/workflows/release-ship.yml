@@ -98,6 +98,16 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ inputs.version }}
 
+      - name: Verify published image architectures
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          for image in astrave astrave-server; do
+            ref="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/$image:$VERSION"
+            docker buildx imagetools inspect --raw "$ref" | jq -e '
+              [.manifests[].platform | select(.os == "linux") | .architecture] | sort == ["amd64", "arm64"]'
+          done
+
   publish:
     needs: docker
     runs-on: ubuntu-latest

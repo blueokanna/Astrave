@@ -1,4 +1,5 @@
 use crate::core::msg::{Message, Ping, UdpPacket, UdpSocketAddr};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -183,7 +184,10 @@ struct LocalReaderCtx {
 }
 
 async fn writer_fn(ctx: LocalReaderCtx) {
-    let mut buf = vec![0u8; ctx.buf_size.max(512)];
+    // A nonblocking receive finishes before yielding, so peers on this thread can reuse the storage.
+    thread_local! { static RECEIVE: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) }; }
+    let size = ctx.buf_size.clamp(512, MAX_DATAGRAM);
+    let remote = UdpSocketAddr::from_std(ctx.remote);
     // One timer per connection, reset on activity. A `timeout` around every
     // `recv` would register and cancel a timer per datagram.
     let idle = tokio::time::sleep(CLIENT_IDLE);
@@ -191,17 +195,24 @@ async fn writer_fn(ctx: LocalReaderCtx) {
 
     loop {
         tokio::select! {
-            received = ctx.udp_conn.recv(&mut buf) => {
-                let Ok(n) = received else { break };
-                idle.as_mut().reset(Instant::now() + CLIENT_IDLE);
-                let slot=match ctx.send_tx.try_reserve() {
-                    Ok(slot)=>slot, Err(mpsc::error::TrySendError::Full(_))=>continue, Err(mpsc::error::TrySendError::Closed(_))=>break,
-                };
-                slot.send(Message::UdpPacket(UdpPacket {
-                    content: buf[..n].to_vec(),
-                    local_addr: None,
-                    remote_addr: Some(UdpSocketAddr::from_std(ctx.remote)),
-                }));
+            ready = ctx.udp_conn.readable() => {
+                if ready.is_err() { break; }
+                let received = RECEIVE.with_borrow_mut(|buf| {
+                    if buf.len() < size { buf.resize(size, 0); }
+                    let n = ctx.udp_conn.try_recv(&mut buf[..size])?;
+                    if let Ok(slot) = ctx.send_tx.try_reserve() {
+                        slot.send(Message::UdpPacket(UdpPacket {
+                            content: buf[..n].to_vec(), local_addr: None, remote_addr: Some(remote.clone()),
+                        }));
+                    }
+                    Ok::<_, std::io::Error>(())
+                });
+                match received {
+                    Ok(()) if ctx.send_tx.is_closed() => break,
+                    Ok(()) => idle.as_mut().reset(Instant::now() + CLIENT_IDLE),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                    Err(_) => break,
+                }
             }
             _ = &mut idle => break,
         }
@@ -223,7 +234,10 @@ pub fn spawn_data_ping(send_tx: mpsc::Sender<Message>) -> tokio::task::JoinHandl
         tick.tick().await;
         loop {
             tick.tick().await;
-            if send_tx.try_send(Message::Ping(Ping::default())).is_err() {
+            if matches!(
+                send_tx.try_send(Message::Ping(Ping::default())),
+                Err(mpsc::error::TrySendError::Closed(_))
+            ) {
                 break;
             }
         }

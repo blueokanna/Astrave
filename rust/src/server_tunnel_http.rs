@@ -31,37 +31,24 @@ impl HttpTunnel {
         let domains = build_domains(&np.domains, sub_domain_host)?;
         let name = np.tunnel_name.clone();
         let locations = expand_locations(&np.locations);
-        let rewrite = np.host_header_rewrite.clone();
-        let basic_auth_user = np.basic_auth_user.clone();
-        let basic_auth_password = np.basic_auth_password.clone();
-
-        gw.unregister_tunnel(&name);
-
-        for domain in &domains {
-            for location in &locations {
-                if let Err(e) = gw.register(
-                    domain,
-                    HttpRoute {
-                        tunnel_name: name.clone(),
-                        control: Arc::downgrade(&control),
-                        location: location.clone(),
-                        host_header_rewrite: rewrite.clone(),
-                        basic_auth_user: basic_auth_user.clone(),
-                        basic_auth_password: basic_auth_password.clone(),
-                        limiter: limiter.clone(),
-                    },
-                ) {
-                    gw.unregister_tunnel(&name);
-                    return Err(e);
-                }
-            }
-        }
+        gw.register(
+            &domains,
+            &locations,
+            HttpRoute {
+                tunnel_name: name.clone(),
+                control: Arc::downgrade(&control),
+                host_header_rewrite: np.host_header_rewrite.clone(),
+                basic_auth_user: np.basic_auth_user.clone(),
+                basic_auth_password: np.basic_auth_password.clone(),
+                limiter,
+            },
+        )?;
 
         tracing::info!(
             tunnel = %name,
             domains = ?domains,
             locations = ?locations,
-            basic_auth = !basic_auth_user.is_empty() || !basic_auth_password.is_empty(),
+            basic_auth = !np.basic_auth_user.is_empty() || !np.basic_auth_password.is_empty(),
             "http tunnel registered"
         );
 
@@ -83,7 +70,7 @@ impl HttpTunnel {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
         {
-            self.gw.unregister_tunnel(&self.name);
+            self.gw.unregister_tunnel(&self.domains, &self.name);
         }
     }
 }
@@ -280,16 +267,16 @@ async fn read_http_request_head<R: AsyncRead + Unpin>(stream: &mut R) -> Result<
                 if header_len > buf.len() {
                     bail!("httparse header length exceeds buffer");
                 }
-                let method = req.method.unwrap_or("").to_string();
-                let target = req.path.unwrap_or("/").to_string();
-                let (is_proxy_request, path) = classify_request_target(&method, &target);
+                let target = req.path.unwrap_or("/");
+                let (is_proxy_request, path) =
+                    classify_request_target(req.method.unwrap_or(""), target);
 
                 let host = req
                     .headers
                     .iter()
                     .find(|h| h.name.eq_ignore_ascii_case("host"))
                     .map(|h| String::from_utf8_lossy(h.value).into_owned())
-                    .or_else(|| host_from_absolute_target(&target))
+                    .or_else(|| host_from_absolute_target(target))
                     .ok_or_else(|| anyhow!("missing Host header"))?;
 
                 let authorization = header_value(&req, "authorization");

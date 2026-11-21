@@ -9,6 +9,7 @@
 //! the WebSocket carries opaque bytes and never inspects them.
 
 use super::stream::{DynStream, boxed_stream};
+use crate::core::tls::PrefixedStream;
 use anyhow::{Context, Result, bail};
 use courierust::courierust_ws::frame::{FrameHeader, Mask, OpCode};
 use std::collections::hash_map::RandomState;
@@ -87,7 +88,7 @@ pub async fn dial_websocket(
         .context("websocket upgrade write")?;
     stream.flush().await?;
 
-    let head = read_http_head(&mut stream).await?;
+    let (head, extra) = read_http_head(&mut stream).await?;
     let head = std::str::from_utf8(&head).context("websocket upgrade response is not utf-8")?;
     let mut lines = head.split("\r\n");
     let status = lines.next().unwrap_or_default();
@@ -96,18 +97,18 @@ pub async fn dial_websocket(
     }
     let expected = courierust::courierust_ws::handshake::accept_key(&key)
         .map_err(|e| anyhow::anyhow!("websocket accept key: {e}"))?;
-    if header_value(lines, "sec-websocket-accept").as_deref() != Some(expected.as_str()) {
+    if header_value(lines, "sec-websocket-accept") != Some(expected.as_str()) {
         bail!("websocket upgrade returned an invalid Sec-WebSocket-Accept");
     }
 
-    Ok(WsByteStream::client(stream).boxed())
+    Ok(WsByteStream::client(PrefixedStream::new(extra, stream)).boxed())
 }
 
 async fn server_upgrade(
     mut stream: tokio::net::TcpStream,
     path: Option<&str>,
-) -> Result<tokio::net::TcpStream> {
-    let head = read_http_head(&mut stream).await?;
+) -> Result<PrefixedStream<tokio::net::TcpStream>> {
+    let (head, extra) = read_http_head(&mut stream).await?;
     let head = std::str::from_utf8(&head).context("websocket upgrade request is not utf-8")?;
     let mut lines = head.split("\r\n");
     let request = lines.next().unwrap_or_default();
@@ -125,10 +126,10 @@ async fn server_upgrade(
         bail!("websocket upgrade headers missing");
     }
     let key = header_value(lines, "sec-websocket-key").unwrap_or_default();
-    if !courierust::courierust_ws::handshake::is_valid_key(&key) {
+    if !courierust::courierust_ws::handshake::is_valid_key(key) {
         bail!("websocket upgrade key is invalid");
     }
-    let accept = courierust::courierust_ws::handshake::accept_key(&key)
+    let accept = courierust::courierust_ws::handshake::accept_key(key)
         .map_err(|e| anyhow::anyhow!("websocket accept key: {e}"))?;
 
     let reply = format!(
@@ -143,30 +144,32 @@ async fn server_upgrade(
         .await
         .context("websocket upgrade reply")?;
     stream.flush().await?;
-    Ok(stream)
+    Ok(PrefixedStream::new(extra, stream))
 }
 
-async fn read_http_head<S: AsyncRead + Unpin>(stream: &mut S) -> Result<Vec<u8>> {
+async fn read_http_head<S: AsyncRead + Unpin>(stream: &mut S) -> Result<(Vec<u8>, Vec<u8>)> {
     let mut head = Vec::with_capacity(512);
-    let mut byte = [0u8; 1];
+    let mut chunk = [0u8; 1024];
     while head.len() < MAX_HANDSHAKE_BYTES {
-        stream.read_exact(&mut byte).await?;
-        head.push(byte[0]);
-        if head.ends_with(b"\r\n\r\n") {
-            return Ok(head);
+        let scan = head.len().saturating_sub(3);
+        let limit = chunk.len().min(MAX_HANDSHAKE_BYTES - head.len());
+        let n = stream.read(&mut chunk[..limit]).await?;
+        if n == 0 {
+            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
+        }
+        head.extend_from_slice(&chunk[..n]);
+        if let Some(pos) = head[scan..].windows(4).position(|s| s == b"\r\n\r\n") {
+            let extra = head.split_off(scan + pos + 4);
+            return Ok((head, extra));
         }
     }
     bail!("websocket handshake exceeded {MAX_HANDSHAKE_BYTES} bytes")
 }
 
-fn header_value<'a>(lines: impl Iterator<Item = &'a str>, name: &str) -> Option<String> {
+fn header_value<'a>(lines: impl Iterator<Item = &'a str>, name: &str) -> Option<&'a str> {
     lines
         .filter_map(|line| line.split_once(':'))
-        .find_map(|(key, value)| {
-            key.trim()
-                .eq_ignore_ascii_case(name)
-                .then(|| value.trim().to_string())
-        })
+        .find_map(|(key, value)| key.trim().eq_ignore_ascii_case(name).then(|| value.trim()))
 }
 
 fn header_has_token<'a>(lines: impl Iterator<Item = &'a str>, name: &str, token: &str) -> bool {
@@ -210,8 +213,6 @@ pub struct WsByteStream<S> {
     payload_mask: Option<Mask>,
     payload_offset: u64,
     control: Option<(OpCode, Vec<u8>)>,
-    pending: Vec<u8>,
-    pending_pos: usize,
     write_frame: Vec<u8>,
     write_pos: usize,
     write_ack: usize,
@@ -238,8 +239,6 @@ impl<S> WsByteStream<S> {
             payload_mask: None,
             payload_offset: 0,
             control: None,
-            pending: Vec::new(),
-            pending_pos: 0,
             write_frame: Vec::new(),
             write_pos: 0,
             write_ack: 0,
@@ -382,17 +381,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for WsByteStream<S> {
 
         loop {
             if buf.remaining() == 0 {
-                return Poll::Ready(Ok(()));
-            }
-
-            if this.pending_pos < this.pending.len() {
-                let n = buf.remaining().min(this.pending.len() - this.pending_pos);
-                buf.put_slice(&this.pending[this.pending_pos..this.pending_pos + n]);
-                this.pending_pos += n;
-                if this.pending_pos == this.pending.len() {
-                    this.pending.clear();
-                    this.pending_pos = 0;
-                }
                 return Poll::Ready(Ok(()));
             }
 
@@ -551,6 +539,25 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for WsByteStream<S> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn upgrade_preserves_coalesced_frame_and_split_delimiter() {
+        let mut bytes = vec![b'x'; 1022];
+        bytes.extend_from_slice(b"\r\n\r\n\x82\x02ok");
+        let (mut tx, mut rx) = tokio::io::duplex(2048);
+        tx.write_all(&bytes).await.unwrap();
+        let (head, extra) = read_http_head(&mut rx).await.unwrap();
+        assert_eq!(&head[..], &bytes[..1026]);
+        let mut ws = WsByteStream::client(PrefixedStream::new(extra, rx));
+        let mut data = [0; 2];
+        ws.read_exact(&mut data).await.unwrap();
+        assert_eq!(&data, b"ok");
+        assert!(
+            read_http_head(&mut vec![b'x'; MAX_HANDSHAKE_BYTES].as_slice())
+                .await
+                .is_err()
+        );
+    }
+
     #[test]
     fn detects_the_upgrade_prefix() {
         assert!(is_websocket_http_request(
@@ -568,10 +575,7 @@ mod tests {
     fn header_lookup_is_case_insensitive() {
         let head = "GET / HTTP/1.1\r\nUpgrade: WebSocket\r\nConnection: keep-alive, Upgrade\r\n";
         let lines = head.split("\r\n");
-        assert_eq!(
-            header_value(lines.clone(), "upgrade").as_deref(),
-            Some("WebSocket")
-        );
+        assert_eq!(header_value(lines.clone(), "upgrade"), Some("WebSocket"));
         assert!(header_has_token(lines.clone(), "connection", "upgrade"));
         assert!(header_has_token(lines, "upgrade", "websocket"));
     }
