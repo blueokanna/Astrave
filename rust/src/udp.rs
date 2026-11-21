@@ -1,4 +1,4 @@
-use crate::core::msg::{Message, Ping, UdpPacket, UdpSocketAddr};
+use crate::core::msg::{UdpPacket, UdpSocketAddr};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -26,6 +26,18 @@ pub const CLIENT_IDLE: Duration = Duration::from_secs(30);
 pub const DATA_PING_INTERVAL: Duration = Duration::from_secs(30);
 pub const SERVER_DATA_READ_DEADLINE: Duration = Duration::from_secs(60);
 
+// The socket read and payload copy finish on this thread before the task yields.
+fn with_receive_buffer<T>(size: usize, read: impl FnOnce(&mut [u8]) -> T) -> T {
+    thread_local! { static RECEIVE: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) }; }
+    let size = size.clamp(512, MAX_DATAGRAM);
+    RECEIVE.with_borrow_mut(|buf| {
+        if buf.len() < size {
+            buf.resize(size, 0);
+        }
+        read(&mut buf[..size])
+    })
+}
+
 pub async fn forward_user_conn(
     udp: Arc<UdpSocket>,
     mut read_rx: mpsc::Receiver<UdpPacket>,
@@ -45,17 +57,23 @@ pub async fn forward_user_conn(
         }
     };
 
-    let mut buf = vec![0u8; buf_size.max(512)];
     let reader = async {
-        loop {
-            match udp.recv_from(&mut buf).await {
-                Ok((n, remote)) => match send_tx.try_reserve() {
+        while udp.readable().await.is_ok() {
+            let received: std::io::Result<bool> = with_receive_buffer(buf_size, |buf| {
+                let (n, remote) = udp.try_recv_from(buf)?;
+                match send_tx.try_reserve() {
                     Ok(slot) => slot.send(UdpPacket::new(buf[..n].to_vec(), Some(remote))),
-                    Err(mpsc::error::TrySendError::Closed(_)) => break,
+                    Err(mpsc::error::TrySendError::Closed(_)) => return Ok(false),
                     Err(mpsc::error::TrySendError::Full(_)) => {
                         tracing::trace!("udp sendCh full; drop packet")
                     }
-                },
+                }
+                Ok(true)
+            });
+            match received {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
                 Err(e) => {
                     tracing::debug!(error = %e, "udp local→data read ended");
                     break;
@@ -69,7 +87,7 @@ pub async fn forward_user_conn(
 pub async fn forwarder(
     local_addr: SocketAddr,
     mut read_rx: mpsc::Receiver<UdpPacket>,
-    send_tx: mpsc::Sender<Message>,
+    send_tx: mpsc::Sender<UdpPacket>,
     buf_size: usize,
     proxy_protocol_version: Option<String>,
 ) {
@@ -179,14 +197,11 @@ struct LocalReaderCtx {
     udp_conn: Arc<UdpSocket>,
     remote: SocketAddr,
     map: Arc<Mutex<HashMap<SocketAddr, Arc<UdpSocket>>>>,
-    send_tx: mpsc::Sender<Message>,
+    send_tx: mpsc::Sender<UdpPacket>,
     buf_size: usize,
 }
 
 async fn writer_fn(ctx: LocalReaderCtx) {
-    // A nonblocking receive finishes before yielding, so peers on this thread can reuse the storage.
-    thread_local! { static RECEIVE: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) }; }
-    let size = ctx.buf_size.clamp(512, MAX_DATAGRAM);
     let remote = UdpSocketAddr::from_std(ctx.remote);
     // One timer per connection, reset on activity. A `timeout` around every
     // `recv` would register and cancel a timer per datagram.
@@ -197,13 +212,12 @@ async fn writer_fn(ctx: LocalReaderCtx) {
         tokio::select! {
             ready = ctx.udp_conn.readable() => {
                 if ready.is_err() { break; }
-                let received = RECEIVE.with_borrow_mut(|buf| {
-                    if buf.len() < size { buf.resize(size, 0); }
-                    let n = ctx.udp_conn.try_recv(&mut buf[..size])?;
+                let received = with_receive_buffer(ctx.buf_size, |buf| {
+                    let n = ctx.udp_conn.try_recv(buf)?;
                     if let Ok(slot) = ctx.send_tx.try_reserve() {
-                        slot.send(Message::UdpPacket(UdpPacket {
+                        slot.send(UdpPacket {
                             content: buf[..n].to_vec(), local_addr: None, remote_addr: Some(remote.clone()),
-                        }));
+                        });
                     }
                     Ok::<_, std::io::Error>(())
                 });
@@ -224,22 +238,4 @@ async fn writer_fn(ctx: LocalReaderCtx) {
     {
         map.remove(&ctx.remote);
     }
-}
-
-pub fn spawn_data_ping(send_tx: mpsc::Sender<Message>) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(DATA_PING_INTERVAL);
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
-        tick.tick().await;
-        loop {
-            tick.tick().await;
-            if matches!(
-                send_tx.try_send(Message::Ping(Ping::default())),
-                Err(mpsc::error::TrySendError::Closed(_))
-            ) {
-                break;
-            }
-        }
-    })
 }

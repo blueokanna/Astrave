@@ -1,6 +1,6 @@
-use crate::core::msg::{self, Codec, FrameWriter, Message};
+use crate::core::msg::{self, Codec, FrameWriter, Message, Ping};
 use crate::core::transport::DynStream;
-use crate::core::udp::{MAX_DATAGRAM, forwarder, queue_capacity, spawn_data_ping, valid_packet};
+use crate::core::udp::{DATA_PING_INTERVAL, MAX_DATAGRAM, forwarder, queue_capacity, valid_packet};
 use anyhow::{Result, anyhow};
 use std::net::SocketAddr;
 use tokio::io::AsyncRead;
@@ -20,31 +20,29 @@ pub async fn run_udp_session(
 ) -> Result<()> {
     let (reader, writer) = tokio::io::split(data);
 
-    let (to_data_tx, mut to_data_rx) = mpsc::channel::<Message>(queue_capacity(packet_size));
+    let (to_data_tx, mut to_data_rx) = mpsc::channel(queue_capacity(packet_size));
     let (from_data_tx, from_data_rx) = mpsc::channel(queue_capacity(MAX_DATAGRAM));
 
-    let ping = AbortOnDropHandle::new(spawn_data_ping(to_data_tx.clone()));
-    let forward = {
-        let tx = to_data_tx;
-        tokio::spawn(async move {
-            forwarder(
-                local_addr,
-                from_data_rx,
-                tx,
-                packet_size,
-                proxy_protocol_version,
-            )
-            .await;
-        })
-    };
+    let forward = tokio::spawn(forwarder(
+        local_addr,
+        from_data_rx,
+        to_data_tx,
+        packet_size,
+        proxy_protocol_version,
+    ));
 
     let (fail_tx, mut fail_rx) = mpsc::channel::<anyhow::Error>(1);
     let forward = AbortOnDropHandle::new(forward);
     let reader_task =
         AbortOnDropHandle::new(tokio::spawn(data_reader(reader, from_data_tx, fail_tx)));
 
-    let mut frames = FrameWriter::with_capacity(writer, 8 * 1024);
-    let mut batch: Vec<Message> = Vec::with_capacity(WRITE_BATCH);
+    let mut frames = FrameWriter::new(writer);
+    let mut batch = Vec::new();
+    let mut ping = tokio::time::interval_at(
+        tokio::time::Instant::now() + DATA_PING_INTERVAL,
+        DATA_PING_INTERVAL,
+    );
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     let result = loop {
         tokio::select! {
@@ -57,6 +55,11 @@ pub async fn run_udp_session(
                     Some(e) => Err(e),
                     None => Ok(()),
                 };
+            }
+            _ = ping.tick() => {
+                if let Err(e) = frames.write(&Message::Ping(Ping::default()), codec).await {
+                    break Err(anyhow!("udp data ping: {e}"));
+                }
             }
             queued = to_data_rx.recv_many(&mut batch, WRITE_BATCH) => {
                 if queued == 0 {
@@ -72,10 +75,8 @@ pub async fn run_udp_session(
     };
 
     reader_task.abort();
-    ping.abort();
     forward.abort();
     let _ = reader_task.await;
-    let _ = ping.await;
     let _ = forward.await;
     result
 }

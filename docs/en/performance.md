@@ -105,6 +105,12 @@ Each trial used one tunnel with 8 domains and 512 distinct paths per domain. The
 
 The shortest and longest startup times were 40.8–350.2 ms and 30.1–232.1 ms respectively. The gateway used fewer private bytes in every candidate run. The HTTP measurements show no reduction in end-to-end request latency for this workload. Reproduce with `python scripts/benchmark-routes.py OLD_DIRECTORY NEW_DIRECTORY`. [Raw samples](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/routes-windows.jsonl)
 
+### Many independent UDP tunnels and fast page changes
+
+On Windows x64, both release binaries ran on loopback with TCP transport, TLS disabled and a configured UDP packet size of 65,535 bytes. Each of 128 distinct mapped ports returned its own 256-byte payload. Across three fresh launches per build in alternating order, median working set / private bytes fell from **20.44 / 15.70 to 10.30 / 5.04 MiB** for the gateway and **13.71 / 11.38 to 11.33 / 6.12 MiB** for the client. The baseline uses the Rust sources from `a7fdfe7` with the workspace and lockfile restored. Reproduce with `python scripts/benchmark-udp-tunnels.py OLD_DIRECTORY NEW_DIRECTORY`. [Memory samples](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/udp-tunnels-windows.jsonl)
+
+Windows Flutter profile builds ran 32 rapid navigation changes per trial, 140 ms apart after warm-up. The median of three per-trial p95 raster times fell from 3.67 to 3.38 ms with the fade-through transition. Build p95 rose from 3.12 to 3.35 ms. All 885 candidate frames had build and raster stages individually below 16.67 ms. These measurements cover the Windows Flutter pipeline. Physical high-refresh Android presentation timing remains unmeasured. [Per-trial frame timings](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/navigation-fade-windows.csv)
+
 ### Algorithm costs
 
 | Operation | Time | Auxiliary space and limits |

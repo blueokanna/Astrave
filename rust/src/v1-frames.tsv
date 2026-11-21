@@ -1,0 +1,12 @@
+A	c12f00000003312e3004686f7374056c696e75780561726d36340475736572056167656e740461626364fc02e2a7ca0373696404	{"version":"1.0","hostname":"host","os":"linux","arch":"arm64","user":"user","agent_id":"agent","auth_digest":"abcd","timestamp":1700000001,"session_id":"sid","pool_count":2}
+a	e11000000003312e3003736964000662696e617279	{"version":"1.0","session_id":"sid","error":"","codec":"binary"}
+T	d447000000037765620468747470fb803e033a3a31fb203f010c6578616d706c652e7465737401012f01750170056c6f63616c01016101620101630164000000000000f83f06636c69656e74	{"tunnel_name":"web","protocol":"http","remote_port":8000,"local_ip":"::1","local_port":8080,"domains":["example.test"],"locations":["/"],"basic_auth_user":"u","basic_auth_password":"p","host_header_rewrite":"local","headers":{"a":"b"},"response_headers":{"c":"d"},"bandwidth":1.5,"bandwidth_limit_side":"client"}
+t	f414000000037765620e6c6f63616c686f73743a3830303000	{"tunnel_name":"web","remote_addr":"localhost:8000","error":""}
+X	d80400000003776562	{"tunnel_name":"web"}
+Q	d100000000	{}
+W	d70e000000037369640461626364fc04e2a7ca	{"session_id":"sid","auth_digest":"abcd","timestamp":1700000002}
+S	d31700000003776562033a3a3150093132372e302e302e31fb901f00	{"tunnel_name":"web","src_addr":"::1","src_port":80,"dst_addr":"127.0.0.1","dst_port":8080,"error":""}
+G	c708000000026566fc06e2a7ca	{"auth_digest":"ef","timestamp":1700000003}
+g	e7050000000462757379	{"error":"busy"}
+D	c4150000000200ff01033a3a312a01093132372e302e302e312b	{"content":"AP8=","local":{"ip":"::1","port":42},"remote":{"ip":"127.0.0.1","port":43}}
+E	c5080000000772657374617274	{"reason":"restart"}

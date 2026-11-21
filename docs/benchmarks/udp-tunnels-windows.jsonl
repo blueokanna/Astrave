@@ -1,0 +1,6 @@
+{"build": "before", "verifiedTunnels": 128, "client": {"workingSetBytes": 21172224, "privateBytes": 13152256}, "gateway": {"workingSetBytes": 26099712, "privateBytes": 16465920}}
+{"build": "after", "verifiedTunnels": 128, "client": {"workingSetBytes": 11878400, "privateBytes": 6418432}, "gateway": {"workingSetBytes": 10735616, "privateBytes": 5218304}}
+{"build": "after", "verifiedTunnels": 128, "client": {"workingSetBytes": 11460608, "privateBytes": 5988352}, "gateway": {"workingSetBytes": 11239424, "privateBytes": 5722112}}
+{"build": "before", "verifiedTunnels": 128, "client": {"workingSetBytes": 14372864, "privateBytes": 11931648}, "gateway": {"workingSetBytes": 21434368, "privateBytes": 16564224}}
+{"build": "before", "verifiedTunnels": 128, "client": {"workingSetBytes": 14258176, "privateBytes": 11722752}, "gateway": {"workingSetBytes": 21180416, "privateBytes": 16338944}}
+{"build": "after", "verifiedTunnels": 128, "client": {"workingSetBytes": 11898880, "privateBytes": 6422528}, "gateway": {"workingSetBytes": 10801152, "privateBytes": 5279744}}

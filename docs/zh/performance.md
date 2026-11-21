@@ -105,6 +105,12 @@ TCP 吞吐另用上述 128 条隧道、64 条预热连接的负载复测。双�
 
 就绪时间分别为 40.8–350.2 ms 和 30.1–232.1 ms。候选版三轮的网关私有字节都更少，这组负载下未观察到端到端请求延迟下降。复现命令为 `python scripts/benchmark-routes.py OLD_DIRECTORY NEW_DIRECTORY`。[原始样本](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/routes-windows.jsonl)
 
+### 128 条独立 UDP 隧道与快速切页
+
+在 Windows x64 上启动 Release 客户端与网关，使用回环、TCP 传输，关闭 TLS，将 UDP 报文上限设为 65,535 字节。128 个独立映射端口各自返回了正确的 256 字节负载。每版启动三次，交错运行。网关工作集 / 私有字节中位数从 **20.44 / 15.70 降至 10.30 / 5.04 MiB**，客户端从 **13.71 / 11.38 降至 11.33 / 6.12 MiB**。基线使用 `a7fdfe7` 的 Rust 源码并恢复了工作区与锁文件。可用 `python scripts/benchmark-udp-tunnels.py 旧版目录 新版目录` 复现。[内存原始样本](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/udp-tunnels-windows.jsonl)
+
+Windows Flutter Profile 客户端每轮预热后连续切页 32 次，间隔 140 ms。按三轮各自的 p95 取中位数，采用淡出再淡入的过渡后，光栅化耗时从 3.67 降至 3.38 ms，构建耗时从 3.12 升至 3.35 ms。新版 885 帧的构建、光栅化两个阶段分别都低于 16.67 ms。这些数据来自 Windows 的 Flutter 渲染管线，Android 高刷实体屏的实际呈现间隔仍待测量。[各轮帧耗时](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/navigation-fade-windows.csv)
+
 ### 算法复杂度
 
 | 操作 | 时间 | 额外空间与上限 |

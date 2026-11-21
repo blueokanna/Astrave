@@ -127,7 +127,7 @@ async fn data_conn_loop(
     closed: Arc<AtomicBool>,
     notify: Arc<Notify>,
 ) {
-    let mut batch: Vec<UdpPacket> = Vec::with_capacity(WRITE_BATCH);
+    let mut batch = Vec::new();
 
     while !closed.load(Ordering::SeqCst) {
         let Some(control) = control.upgrade() else {
@@ -167,7 +167,7 @@ async fn data_conn_loop(
         let DataConn { stream, codec } = data;
         let data = maybe_limit(stream, limiter.clone());
         let (reader, writer) = tokio::io::split(data);
-        let mut frames = FrameWriter::with_capacity(writer, 8 * 1024);
+        let mut frames = FrameWriter::new(writer);
         tracing::info!(
             tunnel = %tunnel_name,
             "udp data conn established"

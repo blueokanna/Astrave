@@ -112,10 +112,10 @@ class _PageMotionState extends State<PageMotion>
     final step = widget.page > oldWidget.page ? 28.0 : -28.0;
     final incomingOffset = reversing ? _mix(_outOffset, _outEnd) : step;
     final incomingOpacity = reversing
-        ? _mix(_outOpacity, 0).clamp(0.0, 1.0)
+        ? _PagePainter.fadeOut(_outOpacity, _controller.value)
         : 0.0;
     _outOffset = _mix(_inOffset, 0);
-    _outOpacity = _mix(_inOpacity, 1).clamp(0.0, 1.0);
+    _outOpacity = _PagePainter.fadeIn(_inOpacity, _controller.value);
     _inOffset = incomingOffset;
     _inOpacity = incomingOpacity;
     _outEnd = -step;
@@ -178,6 +178,14 @@ class _PagePainter extends FlowDelegate {
   final Animation<double> progress;
   final double inOffset, outOffset, outEnd, inOpacity, outOpacity;
 
+  // Material fade-through releases the outgoing opacity layer before fading in the next page.
+  static const _fadeThrough = .35;
+  static double fadeOut(double start, double t) =>
+      start * (1 - (t / _fadeThrough).clamp(0.0, 1.0));
+  static double fadeIn(double start, double t) =>
+      start +
+      (1 - start) * ((t - _fadeThrough) / (1 - _fadeThrough)).clamp(0.0, 1.0);
+
   @override
   void paintChildren(FlowPaintingContext context) {
     if (context.childCount == 1) {
@@ -190,8 +198,8 @@ class _PagePainter extends FlowDelegate {
       transform: Matrix4.translationValues(x, 0, 0),
       opacity: opacity.clamp(0.0, 1.0),
     );
-    paint(0, outOffset + (outEnd - outOffset) * t, outOpacity * (1 - t));
-    paint(1, inOffset * (1 - t), inOpacity + (1 - inOpacity) * t);
+    paint(0, outOffset + (outEnd - outOffset) * t, fadeOut(outOpacity, t));
+    paint(1, inOffset * (1 - t), fadeIn(inOpacity, t));
   }
 
   @override
