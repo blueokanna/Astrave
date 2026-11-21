@@ -71,21 +71,30 @@ jobs:
         run: |
           flutter pub get --enforce-lockfile
           ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358" flutter build apk --release --split-per-abi --no-pub
-      - name: Stage signed APKs
-        if: inputs.release_version != ''
+      - name: Verify APK signatures and stage release assets
         env:
           VERSION: ${{ inputs.release_version }}
-          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          STORE_PASSWORD: ${{ inputs.release_version != '' && secrets.ANDROID_STORE_PASSWORD || '' }}
+          KEY_ALIAS: ${{ inputs.release_version != '' && secrets.ANDROID_KEY_ALIAS || '' }}
         run: |
-          mkdir -p dist/android
+          set -euo pipefail
           signer=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
-          expected=$(keytool -exportcert -keystore "$ASTRAVE_KEYSTORE" -storepass:env STORE_PASSWORD -alias "$KEY_ALIAS" | sha256sum | cut -d' ' -f1)
+          expected=''
+          if [[ -n "$VERSION" ]]; then
+            mkdir -p dist/android
+            expected=$(keytool -exportcert -keystore "$ASTRAVE_KEYSTORE" -storepass:env STORE_PASSWORD -alias "$KEY_ALIAS" | sha256sum | cut -d' ' -f1)
+          fi
           for abi in arm64-v8a armeabi-v7a x86_64; do
             apk="app/build/app/outputs/flutter-apk/app-$abi-release.apk"
             "$signer" verify --print-certs "$apk" > "$RUNNER_TEMP/apk-signer.txt"
-            grep -Fx "Signer #1 certificate SHA-256 digest: $expected" "$RUNNER_TEMP/apk-signer.txt"
-            cp "$apk" "dist/android/astrave_${VERSION}_android_$abi.apk"
+            digest=$(awk '/ certificate SHA-256 digest: / {print $NF}' "$RUNNER_TEMP/apk-signer.txt" | sort -u)
+            if [[ ! "$digest" =~ ^[0-9a-f]{64}$ || "$digest" != "${expected:-$digest}" ]]; then
+              echo "::error::Unexpected APK signing certificate for $abi (expected $expected, found $digest)"
+              exit 1
+            fi
+            expected=$digest
+            echo "$abi signing certificate SHA-256 $digest"
+            if [[ -n "$VERSION" ]]; then cp "$apk" "dist/android/astrave_${VERSION}_android_$abi.apk"; fi
           done
       - uses: actions/upload-artifact@v4
         if: inputs.release_version != ''
