@@ -31,7 +31,9 @@ On a single Ubuntu 24.04 x64 GitHub runner, the same driver measured all three p
 | Orbien | 120.33 (120.09–121.74) | 1.018 s (1.017–1.021) |
 | frp | 120.09 (119.34–121.29) | 2.130 s (2.128–2.131) |
 
-Both clients recovered and verified every echo. Throughput ranges overlap. Builds were running on the same host during these loopback trials. Windows denied execution of frpc. Tailscale direct, DERP and Funnel measurements require authorized test nodes. The Linux workflow checks upstream release archive digests and records three trials per reverse tunnel with the same driver. [Raw Windows samples](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/peers-windows.jsonl) · [Linux comparison runs](https://github.com/blueokanna/Astrave/actions/workflows/compare.yml)
+The Windows trials ran alongside local builds. Windows denied execution of frpc. The Linux workflow checks upstream release archive digests before measuring each reverse tunnel. [Raw Windows samples](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/peers-windows.jsonl) · [Linux comparison runs](https://github.com/blueokanna/Astrave/actions/workflows/compare.yml)
+
+On a separate Ubuntu runner, upstream Tailscale v1.104.7 started two `tailscaled` processes and a private test coordination server. Peer discovery and IPv4/IPv6 ping passed with and without the test server's address masquerading. A three-node case disabled direct UDP and verified six directed peer-relay paths in daemon status. These are connectivity checks. Production NAT traversal, DERP throughput and public Funnel access remain unmeasured. [Execution log](https://github.com/blueokanna/Astrave/actions/runs/44859128175/job/136708181563) · [Test source](https://github.com/tailscale/tailscale/blob/v1.104.7/tstest/integration/integration_test.go)
 
 ```sh
 dart scripts/compare-tunnels.dart astrave=target/release orbien=/path/to/orbien frp=/path/to/frp

@@ -31,7 +31,9 @@ Windows x64 上使用同一 TCP 回显源、Token、TCP 多路复用，关闭传
 | Orbien | 120.33（120.09–121.74） | 1.018 秒（1.017–1.021） |
 | frp | 120.09（119.34–121.29） | 2.130 秒（2.128–2.131） |
 
-两者均完成全部回显和重连，吞吐区间重叠。数据只覆盖本机回环，测试期间本机还有构建任务。Windows 拒绝运行 frpc，表中没有 Windows frp 样本。Tailscale 尚缺两台已授权的测试节点，直连、DERP 和 Funnel 的吞吐均未实测。三种反向隧道使用同一对比脚本，Linux 工作流校验上游发布包 SHA-256 后运行三轮并保存原始数据。[Windows 原始样本](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/peers-windows.jsonl) · [Linux 对比运行](https://github.com/blueokanna/Astrave/actions/workflows/compare.yml)
+Windows 测试期间本机还有构建任务。Windows 拒绝运行 frpc，表中没有 Windows frp 样本。Linux 工作流在测量反向隧道前校验上游发布包的 SHA-256。[Windows 原始样本](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/peers-windows.jsonl) · [Linux 对比运行](https://github.com/blueokanna/Astrave/actions/workflows/compare.yml)
+
+在单独的 Ubuntu runner 上，Tailscale v1.104.7 上游集成测试启动了两个 `tailscaled` 进程及私有测试协调服务器。节点发现通过；IPv4 和 IPv6 在测试服务器启用、禁用地址伪装时均通过 ping。另一组三节点用例禁用 UDP 直连，在守护进程状态中验证了六条有向 Peer Relay 路径。这些结果验证节点连通性。真实公网 NAT 穿透、DERP 吞吐和公网 Funnel 发布仍缺实测。[执行日志](https://github.com/blueokanna/Astrave/actions/runs/44859128175/job/136708181563) · [用例源码](https://github.com/tailscale/tailscale/blob/v1.104.7/tstest/integration/integration_test.go)
 
 ```sh
 dart scripts/compare-tunnels.dart astrave=target/release orbien=/path/to/orbien frp=/path/to/frp

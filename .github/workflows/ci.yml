@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, master]
   pull_request:
@@ -78,6 +79,30 @@ jobs:
           name: android-apks
           path: dist/android/*.apk
           if-no-files-found: error
+
+      - name: Prepare hardware-accelerated Android emulator
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          sudo chmod a+rw /dev/kvm
+          JAVA_HOME="$JAVA_HOME_21_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'emulator' 'system-images;android-33;google_apis;x86_64'
+          echo no | JAVA_HOME="$JAVA_HOME_21_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n settings -k 'system-images;android-33;google_apis;x86_64' -d pixel_2
+      - name: Exercise settings and capture device screenshots
+        if: github.event_name == 'workflow_dispatch'
+        timeout-minutes: 15
+        run: |
+          "$ANDROID_HOME/emulator/emulator" -avd settings -no-window -no-snapshot -no-audio -no-boot-anim -gpu swiftshader_indirect > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          trap 'adb -e emu kill || true' EXIT
+          adb -e wait-for-device
+          until [[ "$(adb -e shell getprop sys.boot_completed | tr -d '\r')" == 1 ]]; do sleep 2; done
+          adb -e shell wm size 540x1160
+          adb -e shell wm density 240
+          python3 scripts/check-android-settings.py app/build/app/outputs/flutter-apk/app-x86_64-release.apk "$RUNNER_TEMP/screens"
+      - uses: actions/upload-artifact@v4
+        if: always() && github.event_name == 'workflow_dispatch'
+        with:
+          name: android-settings-screens
+          path: ${{ runner.temp }}/screens
+          if-no-files-found: warn
 
   check:
     runs-on: ubuntu-latest
