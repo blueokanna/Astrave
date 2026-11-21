@@ -85,6 +85,20 @@ The loopback integration check uses a fresh CA and requires a client certificate
 
 ## Time and space costs
 
+### HTTP gateway with 4,096 registered locations
+
+Each trial used one tunnel with 8 domains and 512 distinct paths per domain. The driver warmed the gateway, started the client, and measured time until a request to the last registered host and path returned HTTP 401. It then timed 512 matching requests (401) and 512 misses (404) over fresh loopback connections. This exercises route selection and Basic authentication without starting an origin connection. The medians below compare `b29fe81` and `4d17ddc` over three interleaved Windows x64 trials per build. The launch timer includes configuration parsing and registration. HTTP timings include the Python client and TCP connection setup.
+
+| Metric | Previous | Candidate |
+| --- | ---: | ---: |
+| Client startup to last route ready | 42.8 ms | 31.2 ms |
+| Gateway working set / private bytes | 8.34 / 3.18 MiB | 7.62 / 2.44 MiB |
+| Median hit / miss latency | 660 / 640 µs | 670 / 671 µs |
+
+The shortest and longest startup times were 40.8–350.2 ms and 30.1–232.1 ms respectively. The gateway used fewer private bytes in every candidate run. The HTTP measurements show no reduction in end-to-end request latency for this workload. Reproduce with `python scripts/benchmark-routes.py OLD_DIRECTORY NEW_DIRECTORY`. [Raw samples](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/routes-windows.jsonl)
+
+### Algorithm costs
+
 | Operation | Time | Auxiliary space and limits |
 | --- | --- | --- |
 | Control frame with `B` body bytes | O(B) framing and decoding for fixed schema depth. Draining completed data tasks preserves the partially read frame. | One reusable read buffer per reader. Body limits are 4 MiB on control streams and 128 KiB on UDP streams. |

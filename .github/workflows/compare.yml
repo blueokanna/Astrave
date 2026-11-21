@@ -3,6 +3,21 @@ on: workflow_dispatch
 permissions:
   contents: read
 jobs:
+  tailscale:
+    name: Tailscale private nodes and peer relay
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: tailscale/tailscale
+          ref: cbc74fe48ef1b1649f69a4d9a602319427e25102 # v1.104.7
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Exercise the upstream private test network
+        run: go test -v -count=1 -timeout=12m ./tstest/integration -run '^(TestTwoNodes|TestNATPing|TestPeerRelayPing)$'
   loopback:
     runs-on: ubuntu-24.04
     timeout-minutes: 40

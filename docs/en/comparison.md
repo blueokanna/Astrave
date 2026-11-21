@@ -23,6 +23,14 @@ Each Windows x64 trial used one TCP echo origin, token authentication, multiplex
 | Astrave | 281.7 (227.2–294.1) | 1.360 s (1.035–1.408) |
 | Orbien | 257.5 (190.5–316.4) | 1.194 s (1.020–1.322) |
 
+On a single Ubuntu 24.04 x64 GitHub runner, the same driver measured all three products with rotating trial order. All nine trials verified every byte before and after the gateway restart. The throughput ranges overlap. Recovery time includes process startup, the client's retry delay and polling at 100 ms intervals. [GitHub Actions run](https://github.com/blueokanna/Astrave/actions/runs/44858386871) · [Raw Linux samples](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/peers-linux.jsonl)
+
+| Linux gateway | Median duplex MiB/s (range) | Median restart to echo (range) |
+| --- | ---: | ---: |
+| Astrave | 119.68 (119.22–157.49) | 1.019 s (1.019–1.021) |
+| Orbien | 120.33 (120.09–121.74) | 1.018 s (1.017–1.021) |
+| frp | 120.09 (119.34–121.29) | 2.130 s (2.128–2.131) |
+
 Both clients recovered and verified every echo. Throughput ranges overlap. Builds were running on the same host during these loopback trials. Windows denied execution of frpc. Tailscale direct, DERP and Funnel measurements require authorized test nodes. The Linux workflow checks upstream release archive digests and records three trials per reverse tunnel with the same driver. [Raw Windows samples](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/peers-windows.jsonl) · [Linux comparison runs](https://github.com/blueokanna/Astrave/actions/workflows/compare.yml)
 
 ```sh

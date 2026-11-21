@@ -1,0 +1,6 @@
+{"build": "baseline", "domains": 8, "locationsPerDomain": 512, "readyMs": 350.2012, "server": {"WorkingSet64": 8765440, "PrivateMemorySize64": 3317760}, "hitP50Us": 363.05, "missP50Us": 358.8}
+{"build": "candidate", "domains": 8, "locationsPerDomain": 512, "readyMs": 232.0743, "server": {"WorkingSet64": 7987200, "PrivateMemorySize64": 2555904}, "hitP50Us": 669.9, "missP50Us": 670.55}
+{"build": "candidate", "domains": 8, "locationsPerDomain": 512, "readyMs": 31.2283, "server": {"WorkingSet64": 7950336, "PrivateMemorySize64": 2506752}, "hitP50Us": 790.0, "missP50Us": 807.7}
+{"build": "baseline", "domains": 8, "locationsPerDomain": 512, "readyMs": 40.8386, "server": {"WorkingSet64": 8744960, "PrivateMemorySize64": 3334144}, "hitP50Us": 662.7, "missP50Us": 665.25}
+{"build": "baseline", "domains": 8, "locationsPerDomain": 512, "readyMs": 42.7573, "server": {"WorkingSet64": 8744960, "PrivateMemorySize64": 3379200}, "hitP50Us": 659.75, "missP50Us": 640.0}
+{"build": "candidate", "domains": 8, "locationsPerDomain": 512, "readyMs": 30.0615, "server": {"WorkingSet64": 8036352, "PrivateMemorySize64": 2600960}, "hitP50Us": 598.75, "missP50Us": 563.8}

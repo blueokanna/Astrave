@@ -23,6 +23,14 @@ Windows x64 上使用同一 TCP 回显源、Token、TCP 多路复用，关闭传
 | Astrave | 281.7（227.2–294.1） | 1.360 秒（1.035–1.408） |
 | Orbien | 257.5（190.5–316.4） | 1.194 秒（1.020–1.322） |
 
+在同一台 Ubuntu 24.04 x64 GitHub runner 上，三款产品轮换顺序，各完成三轮。九轮均在网关重启前后逐字节通过回显校验。吞吐区间重叠。恢复时间包含进程启动、客户端重试等待以及 100 毫秒间隔的探测。[GitHub Actions 运行](https://github.com/blueokanna/Astrave/actions/runs/44858386871) · [Linux 原始样本](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/peers-linux.jsonl)
+
+| Linux 网关 | 双向吞吐中位数（范围），MiB/s | 重启至回显中位数（范围） |
+| --- | ---: | ---: |
+| Astrave | 119.68（119.22–157.49） | 1.019 秒（1.019–1.021） |
+| Orbien | 120.33（120.09–121.74） | 1.018 秒（1.017–1.021） |
+| frp | 120.09（119.34–121.29） | 2.130 秒（2.128–2.131） |
+
 两者均完成全部回显和重连，吞吐区间重叠。数据只覆盖本机回环，测试期间本机还有构建任务。Windows 拒绝运行 frpc，表中没有 Windows frp 样本。Tailscale 尚缺两台已授权的测试节点，直连、DERP 和 Funnel 的吞吐均未实测。三种反向隧道使用同一对比脚本，Linux 工作流校验上游发布包 SHA-256 后运行三轮并保存原始数据。[Windows 原始样本](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/peers-windows.jsonl) · [Linux 对比运行](https://github.com/blueokanna/Astrave/actions/workflows/compare.yml)
 
 ```sh
