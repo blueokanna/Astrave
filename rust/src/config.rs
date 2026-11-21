@@ -72,7 +72,7 @@ pub fn parse_config_toml<T: serde::de::DeserializeOwned>(
     text: &str,
     path: &Path,
 ) -> anyhow::Result<T> {
-    toml::from_str(text).map_err(|err| {
+    toml_edit::de::from_str(text).map_err(|err| {
         let Some(span) = err.span() else {
             return anyhow::anyhow!("Invalid TOML in '{}'", path.display());
         };

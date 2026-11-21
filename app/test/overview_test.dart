@@ -93,15 +93,16 @@ void main() {
       await render();
       expect(find.textContaining('127.0.0.1:2345'), findsNothing);
       expect(find.textContaining('pending reload'), findsOneWidget);
-      await tester.scrollUntilVisible(
-        find.text('route-20'),
-        350,
-        scrollable: find
-            .byWidgetPredicate(
-              (w) => w is Scrollable && w.axisDirection == AxisDirection.down,
-            )
-            .first,
-      );
+      // Drag in the list gutter. On desktop a drag over a SelectableText
+      // endpoint belongs to the text selection gesture recognizer.
+      final list = tester.getRect(find.byType(CustomScrollView));
+      for (var i = 0; i < 30 && find.text('route-20').evaluate().isEmpty; i++) {
+        await tester.dragFrom(
+          Offset(list.left + 8, list.bottom - 40),
+          const Offset(0, -200),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+      }
       expect(find.text('route-20'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },

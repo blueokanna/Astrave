@@ -51,26 +51,17 @@ impl FieldVisitor {
         if msg.is_empty() && self.fields.is_empty() {
             return None;
         }
-        let prefix = match level {
-            Level::ERROR => "ERROR",
-            Level::WARN => "WARN ",
-            Level::INFO => "INFO ",
-            _ => return None,
-        };
         let mut out = String::with_capacity(64 + msg.len());
-        out.push_str(prefix);
-        out.push(' ');
+        out.push_str(level.as_str());
         if !msg.is_empty() {
+            out.push(' ');
             out.push_str(msg);
         }
         for (k, v) in self.fields {
             if k == "log.target" || k == "log.module_path" || k == "log.file" || k == "log.line" {
                 continue;
             }
-            if out.ends_with(' ') {
-            } else {
-                out.push(' ');
-            }
+            out.push(' ');
             out.push_str(&k);
             out.push('=');
             out.push_str(&v);

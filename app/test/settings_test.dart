@@ -109,18 +109,18 @@ void main() {
       final store = _Preferences();
       final old = await Appearance.load(store);
       expect(old.language, AppLanguage.zh);
-      expect(old.theme, ThemeMode.light);
+      expect(old.theme, AppTheme.light);
       await old
           .copyWith(
             language: AppLanguage.system,
-            theme: ThemeMode.system,
+            theme: AppTheme.system,
             palette: Palette.jade,
             glass: NavGlass.liquid,
           )
           .save(store);
       final next = await Appearance.load(store);
       expect(next.language, AppLanguage.system);
-      expect(next.theme, ThemeMode.system);
+      expect(next.theme, AppTheme.system);
       expect(next.palette, Palette.jade);
       expect(next.glass, NavGlass.liquid);
     },
@@ -145,6 +145,8 @@ void main() {
               body: SingleChildScrollView(
                 child: SettingsPanel(
                   value: appearance,
+                  about: () {},
+                  updates: const SizedBox.shrink(),
                   text: (en, zh) => en,
                   onChanged: (v) => update(() => appearance = v),
                   certificates: () => opened = true,

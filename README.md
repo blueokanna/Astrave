@@ -62,12 +62,14 @@ On Windows, launch `app/build/windows/x64/runner/Release/astrave_desktop.exe` on
 | --- | --- |
 | Overview | Connect or disconnect, add or edit a tunnel, and copy its assigned endpoint. |
 | Profile | Edit TOML directly, preserve comments, validate changes, save and reload the running client. |
-| Activity | Search or clear the most recent 500 session log lines. |
-| Certificates | Manage DNS credentials for Cloudflare, Alibaba Cloud or Tencent Cloud and request a Let’s Encrypt certificate through DNS-01. |
+| Activity | Search the most recent 500 entries and filter by INFO, WARN or ERROR. |
+| Settings | Choose from 15 languages, adjust the theme, check GitHub Releases, or open Certificates and About Astrave. |
 
-The **More** menu shows process CPU usage, resident memory and session uptime under **About Astrave**. On desktops with a system tray, use **Hide to tray** to keep the client running and the Astrave tray menu to reopen it. Language and theme choices are saved locally.
+**Settings → About Astrave** shows process CPU usage, resident memory and session uptime. On desktops with a system tray, use **Hide to tray** to keep the client running and reopen it from the tray menu. [Appearance, updates and DNS-01](docs/en/desktop.md)
 
 ## Deployment
+
+To reach a service such as Magpie or sub2api through a private loopback port on another host, configure a publisher, a consumer and a rendezvous. Each peer checks the other’s certificate fingerprint before forwarding TCP streams. [Peer configuration and systemd unit](docs/en/transport/peer.md)
 
 The loopback example uses plaintext TCP. For a remote deployment, configure the same `auth.token` on both peers, set `transport.tls.force = true` on the server, and supply its `certFile` and `keyFile`. Enable `transport.tls.enable` on the client. The client verifies the server name and certificate chain using the host trust store by default. Set the client’s `transport.tls.trustedCaFile` for a private CA. Setting that field on the **server** enables client-certificate authentication and requires a corresponding client certificate and key. Choose `listen` and `proxyAddr` explicitly for the interfaces you intend to publish on.
 

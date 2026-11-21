@@ -3,13 +3,12 @@ use super::gw::{
 };
 use crate::access::prepare_ingress;
 use crate::control::Control;
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 use astrave_desktop::core::limit::{BandwidthLimiter, maybe_limit};
 use astrave_desktop::core::msg::NewTunnel;
-use httparse::Status;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 
@@ -118,8 +117,6 @@ pub async fn run_http_gw_listener(
 }
 
 struct ParsedHttpHead {
-    raw: Vec<u8>,
-    body_prefix: Vec<u8>,
     host: String,
     path: String,
     is_proxy_request: bool,
@@ -133,9 +130,9 @@ async fn handle_http_ingress(
     peer: std::net::SocketAddr,
 ) -> Result<()> {
     let mut ingress = prepare_ingress(stream, peer);
-    let head = tokio::time::timeout(
+    let (mut raw, body_prefix, head) = tokio::time::timeout(
         std::time::Duration::from_secs(15),
-        read_http_request_head(&mut ingress.stream),
+        astrave_desktop::core::net::read_request_head(&mut ingress.stream, routing_headers),
     )
     .await??;
 
@@ -176,16 +173,17 @@ async fn handle_http_ingress(
         return Err(anyhow!("http tunnel client gone: {}", route.tunnel_name));
     };
 
-    let mut raw = head.raw;
-    if !route.host_header_rewrite.is_empty() {
-        rewrite_host_header(&mut raw, &route.host_header_rewrite)?;
-    }
-
-    astrave_desktop::core::net::apply_x_forwarded_for(
+    let had_host = astrave_desktop::core::net::forward_request_headers(
         &mut raw,
+        &route.host_header_rewrite,
         &ingress.source.ip().to_string(),
         "http",
     )?;
+
+    anyhow::ensure!(
+        had_host || route.host_header_rewrite.is_empty(),
+        "Host header not found for rewrite"
+    );
 
     let data = match control.get_data_conn().await {
         Ok(w) => w,
@@ -209,10 +207,10 @@ async fn handle_http_ingress(
         .await?;
 
     let mut data = maybe_limit(data.stream, route.limiter.clone());
-    let preamble_len = (raw.len() + head.body_prefix.len()) as u64;
+    let preamble_len = (raw.len() + body_prefix.len()) as u64;
     data.write_all(&raw).await?;
-    if !head.body_prefix.is_empty() {
-        data.write_all(&head.body_prefix).await?;
+    if !body_prefix.is_empty() {
+        data.write_all(&body_prefix).await?;
     }
     tracing::debug!(
         tunnel = %route.tunnel_name,
@@ -236,66 +234,19 @@ async fn handle_http_ingress(
     Ok(())
 }
 
-async fn read_http_request_head<R: AsyncRead + Unpin>(stream: &mut R) -> Result<ParsedHttpHead> {
-    let mut buf = Vec::with_capacity(4096);
-    let mut tmp = [0u8; 2048];
-    let mut request_start = 0;
-    loop {
-        let n = stream.read(&mut tmp).await?;
-        if n == 0 {
-            bail!("client closed before http headers completed");
-        }
-        let scan_from = buf.len().saturating_sub(2);
-        buf.extend_from_slice(&tmp[..n]);
-        if buf.len() > 64 * 1024 {
-            bail!("http headers too large");
-        }
-
-        // httparse accepts both CRLF and LF. Parse only after the empty line,
-        // including delimiters split across reads and optional leading blanks.
-        while request_start < buf.len() && matches!(buf[request_start], b'\r' | b'\n') {
-            request_start += 1;
-        }
-        let tail = &buf[scan_from.max(request_start)..];
-        if !(tail.windows(2).any(|s| s == b"\n\n") || tail.windows(3).any(|s| s == b"\n\r\n")) {
-            continue;
-        }
-        let mut headers = [httparse::EMPTY_HEADER; 64];
-        let mut req = httparse::Request::new(&mut headers);
-        match req.parse(&buf)? {
-            Status::Complete(header_len) => {
-                if header_len > buf.len() {
-                    bail!("httparse header length exceeds buffer");
-                }
-                let target = req.path.unwrap_or("/");
-                let (is_proxy_request, path) =
-                    classify_request_target(req.method.unwrap_or(""), target);
-
-                let host = req
-                    .headers
-                    .iter()
-                    .find(|h| h.name.eq_ignore_ascii_case("host"))
-                    .map(|h| String::from_utf8_lossy(h.value).into_owned())
-                    .or_else(|| host_from_absolute_target(target))
-                    .ok_or_else(|| anyhow!("missing Host header"))?;
-
-                let authorization = header_value(&req, "authorization");
-                let proxy_authorization = header_value(&req, "proxy-authorization");
-
-                let body_prefix = buf.split_off(header_len);
-                return Ok(ParsedHttpHead {
-                    raw: buf,
-                    body_prefix,
-                    host: normalize_host(&host),
-                    path,
-                    is_proxy_request,
-                    authorization,
-                    proxy_authorization,
-                });
-            }
-            Status::Partial => continue,
-        }
-    }
+fn routing_headers(req: &httparse::Request<'_, '_>) -> Result<ParsedHttpHead> {
+    let target = req.path.unwrap_or("/");
+    let (is_proxy_request, path) = classify_request_target(req.method.unwrap_or(""), target);
+    let host = header_value(req, "host")
+        .or_else(|| host_from_absolute_target(target))
+        .ok_or_else(|| anyhow!("missing Host header"))?;
+    Ok(ParsedHttpHead {
+        host: normalize_host(&host),
+        path,
+        is_proxy_request,
+        authorization: header_value(req, "authorization"),
+        proxy_authorization: header_value(req, "proxy-authorization"),
+    })
 }
 
 fn header_value(req: &httparse::Request<'_, '_>, name: &str) -> Option<String> {
@@ -336,49 +287,6 @@ fn host_from_absolute_target(target: &str) -> Option<String> {
     } else {
         Some(hostport.to_string())
     }
-}
-
-fn rewrite_host_header(buf: &mut Vec<u8>, new_host: &str) -> Result<()> {
-    let lower = b"host:";
-    let text = String::from_utf8_lossy(buf);
-    let mut out = String::new();
-    let mut replaced = false;
-    let mut in_headers = true;
-    for line in text.split_inclusive('\n') {
-        if !in_headers {
-            out.push_str(line);
-            continue;
-        }
-        if line == "\r\n" || line == "\n" {
-            out.push_str(line);
-            in_headers = false;
-            continue;
-        }
-        let trimmed_start = line.trim_start_matches([' ', '\t']);
-        if !replaced
-            && trimmed_start.len() >= 5
-            && trimmed_start.as_bytes()[..5].eq_ignore_ascii_case(lower)
-        {
-            let ending = if line.ends_with("\r\n") {
-                "\r\n"
-            } else if line.ends_with('\n') {
-                "\n"
-            } else {
-                ""
-            };
-            out.push_str("Host: ");
-            out.push_str(new_host);
-            out.push_str(ending);
-            replaced = true;
-        } else {
-            out.push_str(line);
-        }
-    }
-    if !replaced {
-        return Err(anyhow!("Host header not found for rewrite"));
-    }
-    *buf = out.into_bytes();
-    Ok(())
 }
 
 pub async fn write_not_found<W: AsyncWrite + Unpin>(stream: &mut W) {

@@ -17,13 +17,10 @@ pub struct PluginContext {
     pub tcp_keepalive: TcpKeepaliveConfig,
 }
 
-#[allow(dead_code)]
 pub struct ConnectionInfo {
     pub stream: DynStream,
     pub src_addr: String,
     pub src_port: u16,
-    pub dst_addr: String,
-    pub dst_port: u16,
 }
 
 #[async_trait]

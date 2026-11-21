@@ -31,7 +31,7 @@ def ports(count, kind=socket.SOCK_STREAM):
         return [sock.getsockname()[1] for sock in sockets]
 
 
-def certificates(work, openssl):
+def certificates(work, openssl, identities=(("server", "serverAuth"), ("client", "clientAuth"))):
     def run(*arguments):
         subprocess.run([openssl, *arguments], cwd=work, check=True, capture_output=True)
 
@@ -54,7 +54,7 @@ def certificates(work, openssl):
         "-out",
         "ca.pem",
     )
-    for name, usage in [("server", "serverAuth"), ("client", "clientAuth")]:
+    for name, usage in identities:
         run(
             "req",
             "-newkey",

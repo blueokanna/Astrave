@@ -14,18 +14,36 @@ ThemeData desktopTheme(
   Brightness brightness,
   ColorScheme? dynamicScheme, {
   Color? seed,
+  bool blackSurface = false,
+  bool preferDynamic = false,
+  bool simplifiedChinese = true,
 }) {
-  final scheme =
-      (seed == null ? dynamicScheme : null) ??
+  final base =
+      (preferDynamic || seed == null ? dynamicScheme : null) ??
       ColorScheme.fromSeed(
         seedColor: seed ?? const Color(0xff6651a8),
         brightness: brightness,
         dynamicSchemeVariant: DynamicSchemeVariant.expressive,
       );
+  final scheme = blackSurface
+      ? base.copyWith(
+          surface: Colors.black,
+          surfaceDim: Colors.black,
+          surfaceContainerLowest: Colors.black,
+          surfaceContainerLow: Color.alphaBlend(
+            base.onSurface.withValues(alpha: .05),
+            Colors.black,
+          ),
+          surfaceContainer: Color.alphaBlend(
+            base.onSurface.withValues(alpha: .09),
+            Colors.black,
+          ),
+        )
+      : base;
   return ThemeData(
     useMaterial3: true,
     fontFamily: 'GoogleSans',
-    fontFamilyFallback: const ['HarmonyOSSans'],
+    fontFamilyFallback: simplifiedChinese ? const ['HarmonyOSSans'] : null,
     colorScheme: scheme,
     pageTransitionsTheme: const PageTransitionsTheme(
       builders: {
@@ -50,8 +68,8 @@ ThemeData desktopTheme(
     iconButtonTheme: const IconButtonThemeData(
       variant: StyleVariant.material3Expressive,
     ),
-    inputDecorationTheme: const InputDecorationThemeData(
-      border: OutlineInputBorder(),
+    inputDecorationTheme: InputDecorationThemeData(
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
       filled: true,
     ),
   );
@@ -109,7 +127,10 @@ class _PageMotionState extends State<PageMotion>
       return;
     }
     final reversing = widget.page == _previous?.page;
-    final step = widget.page > oldWidget.page ? 28.0 : -28.0;
+    final forward = widget.page > oldWidget.page;
+    final step = forward == (Directionality.of(context) == TextDirection.ltr)
+        ? 28.0
+        : -28.0;
     final incomingOffset = reversing ? _mix(_outOffset, _outEnd) : step;
     final incomingOpacity = reversing
         ? _PagePainter.fadeOut(_outOpacity, _controller.value)

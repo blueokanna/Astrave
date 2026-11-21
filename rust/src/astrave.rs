@@ -3,6 +3,7 @@ use astrave_desktop::client::{ClientConfig, ClientHandle, StartOptions, local_co
 use astrave_desktop::core::logging;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+mod peer;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -25,17 +26,29 @@ struct Cli {
 enum Command {
     Reload,
     Verify,
+    /// Bridge a local TCP service over a mutually authenticated direct QUIC link.
+    Peer,
+    /// Introduce a configured pair of peers using their observed UDP addresses.
+    Rendezvous,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    if matches!(cli.command, Some(Command::Peer | Command::Rendezvous)) {
+        let path = cli
+            .config
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("peer and rendezvous require -c FILE"))?;
+        return peer::run(path, matches!(cli.command, Some(Command::Rendezvous))).await;
+    }
     let config_path = astrave_desktop::client::resolve_client_config_path(cli.config.as_deref())?;
 
     match cli.command {
         None => run(config_path).await,
         Some(Command::Reload) => reload(config_path).await,
         Some(Command::Verify) => verify(config_path),
+        Some(Command::Peer | Command::Rendezvous) => unreachable!(),
     }
 }
 

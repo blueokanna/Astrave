@@ -4,8 +4,7 @@ use crate::core::net::TcpKeepaliveConfig;
 use crate::core::tls::load_or_generate_https_server_config;
 use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
-use httparse::Status;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsAcceptor;
 
@@ -66,9 +65,14 @@ impl Plugin for TlsTermPlugin {
         crate::core::net::tune_tcp_stream(&local, self.tcp_keepalive);
 
         let (mut tls_r, mut tls_w) = tokio::io::split(tls);
-        let (mut headers, body_prefix) = read_http_request_head(&mut tls_r).await?;
-        apply_host_rewrite(&mut headers, &self.host_header_rewrite)?;
-        crate::core::net::apply_x_forwarded_for(&mut headers, &conn.src_addr, "https")?;
+        let (mut headers, body_prefix, ()) =
+            crate::core::net::read_request_head(&mut tls_r, |_| Ok(())).await?;
+        crate::core::net::forward_request_headers(
+            &mut headers,
+            &self.host_header_rewrite,
+            &conn.src_addr,
+            "https",
+        )?;
 
         local.write_all(&headers).await?;
         if !body_prefix.is_empty() {
@@ -88,75 +92,4 @@ impl Plugin for TlsTermPlugin {
         );
         Ok(())
     }
-}
-
-async fn read_http_request_head<R: AsyncReadExt + Unpin>(
-    stream: &mut R,
-) -> Result<(Vec<u8>, Vec<u8>)> {
-    let mut buf = Vec::with_capacity(4096);
-    let mut tmp = [0u8; 2048];
-    loop {
-        let n = stream.read(&mut tmp).await?;
-        if n == 0 {
-            bail!("client closed before http headers completed");
-        }
-        buf.extend_from_slice(&tmp[..n]);
-        if buf.len() > 64 * 1024 {
-            bail!("http headers too large");
-        }
-        let mut headers = [httparse::EMPTY_HEADER; 64];
-        let mut req = httparse::Request::new(&mut headers);
-        match req.parse(&buf)? {
-            Status::Complete(header_len) => {
-                if header_len > buf.len() {
-                    bail!("httparse header length exceeds buffer");
-                }
-                let body_prefix = buf.split_off(header_len);
-                return Ok((buf, body_prefix));
-            }
-            Status::Partial => continue,
-        }
-    }
-}
-
-fn header_block_end(lines: &[String]) -> usize {
-    lines
-        .iter()
-        .position(|l| l == "\r\n" || l == "\n")
-        .unwrap_or(lines.len())
-}
-
-fn apply_host_rewrite(buf: &mut Vec<u8>, host_rewrite: &str) -> Result<()> {
-    if host_rewrite.is_empty() {
-        return Ok(());
-    }
-
-    let text = String::from_utf8_lossy(buf);
-    let mut lines: Vec<String> = text.split_inclusive('\n').map(|s| s.to_string()).collect();
-    if lines.is_empty() {
-        bail!("empty http request");
-    }
-
-    let ending = if lines.iter().any(|l| l.ends_with("\r\n")) {
-        "\r\n"
-    } else {
-        "\n"
-    };
-
-    let blank_idx = header_block_end(&lines);
-    let mut replaced = false;
-    for line in lines.iter_mut().take(blank_idx).skip(1) {
-        let trimmed = line.trim_start_matches([' ', '\t']);
-        if trimmed.len() >= 5 && trimmed.as_bytes()[..5].eq_ignore_ascii_case(b"host:") {
-            *line = format!("Host: {host_rewrite}{ending}");
-            replaced = true;
-            break;
-        }
-    }
-    if !replaced {
-        lines.insert(blank_idx, format!("Host: {host_rewrite}{ending}"));
-    }
-
-    *buf = lines.join("").into_bytes();
-    Ok(())
 }

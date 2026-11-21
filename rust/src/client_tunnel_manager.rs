@@ -114,8 +114,6 @@ impl TunnelManager {
                     stream: data,
                     src_addr: start.src_addr.clone(),
                     src_port: start.src_port,
-                    dst_addr: start.dst_addr.clone(),
-                    dst_port: start.dst_port,
                 })
                 .await;
         }

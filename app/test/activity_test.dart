@@ -18,11 +18,12 @@ void main() {
         ),
       ),
     );
-    expect(find.text('WARN oldest'), findsOneWidget);
+    expect(find.text('oldest'), findsOneWidget);
     logs.append([...List.filled(SessionLog.limit - 1, 'INFO'), 'WARN newest']);
     await tester.pump();
-    expect(find.text('WARN oldest'), findsNothing);
-    expect(find.text('WARN newest'), findsOneWidget);
+    expect(find.text('oldest'), findsNothing);
+    expect(find.text('newest'), findsOneWidget);
+    expect(find.text('WARN'), findsOneWidget);
     expect(find.text('INFO'), findsNothing);
     await tester.tap(find.byTooltip('Clear logs'));
     await tester.pump();

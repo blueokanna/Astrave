@@ -2,6 +2,7 @@ import 'package:tray_manager/tray_manager.dart' as tray;
 import 'package:window_manager/window_manager.dart' as wm;
 
 import 'src/rust/api.dart' as rust;
+import 'design.dart';
 
 class DesktopTray {
   final window = wm.WindowManager.instance.getCurrent();
@@ -17,7 +18,7 @@ class DesktopTray {
   );
   bool visible = false;
 
-  void install(bool chinese) {
+  void install(LocalText text) {
     if (window == null || icon == null || menu == null) return;
     icon!.icon = tray.ImageAsset.fromAsset('assets/astrave.png');
     icon!.setTooltip('Astrave');
@@ -40,7 +41,7 @@ class DesktopTray {
       ..addItem(showItem)
       ..addSeparator()
       ..addItem(quitItem);
-    localize(chinese);
+    localize(text);
     icon!
       ..setContextMenu(menu)
       ..setContextMenuTrigger(tray.ContextMenuTrigger.rightClicked)
@@ -50,9 +51,9 @@ class DesktopTray {
     visible = icon!.setVisible(true);
   }
 
-  void localize(bool chinese) {
-    showItem?.label = chinese ? '显示 Astrave' : 'Show Astrave';
-    quitItem?.label = chinese ? '退出' : 'Quit';
+  void localize(LocalText text) {
+    showItem?.label = text('Show Astrave', '显示 Astrave');
+    quitItem?.label = text('Quit', '退出');
   }
 
   void hide() => window?.hide();

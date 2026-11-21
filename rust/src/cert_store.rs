@@ -3,16 +3,9 @@ use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[derive(Clone)]
 pub struct Store {
     root: PathBuf,
-}
-
-impl Clone for Store {
-    fn clone(&self) -> Self {
-        Self {
-            root: self.root.clone(),
-        }
-    }
 }
 
 impl Store {
@@ -50,11 +43,6 @@ impl Store {
         self.root.join("acme").join("account.json")
     }
 
-    #[allow(dead_code)]
-    pub fn acme_staging_account_path(&self) -> PathBuf {
-        self.root.join("acme").join("account-staging.json")
-    }
-
     pub fn list_providers(&self) -> Result<Vec<Provider>> {
         Ok(self.load_providers()?.providers)
     }
@@ -88,6 +76,11 @@ impl Store {
             }
             file.providers.push(provider.clone());
         } else if let Some(slot) = file.providers.iter_mut().find(|p| p.id == provider.id) {
+            if (slot.vendor != provider.vendor || slot.access_key_id != provider.access_key_id)
+                && secret.is_none_or(|s| s.trim().is_empty())
+            {
+                bail!("changing the DNS provider or account requires a new secret");
+            }
             *slot = provider.clone();
         } else {
             bail!("provider not found");
@@ -229,4 +222,48 @@ pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     tmp.persist(path)
         .with_context(|| format!("save {}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cert::model::Vendor;
+
+    #[test]
+    fn credentials_follow_the_provider_and_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Store::open(dir.path().into()).unwrap();
+        let mut provider = db
+            .upsert_provider(
+                Provider {
+                    id: String::new(),
+                    name: "zone".into(),
+                    vendor: Vendor::Cloudflare,
+                    access_key_id: String::new(),
+                },
+                Some("first"),
+            )
+            .unwrap();
+        provider.name = "renamed".into();
+        db.upsert_provider(provider.clone(), None).unwrap();
+        provider.vendor = Vendor::Aliyun;
+        provider.access_key_id = "owner".into();
+        assert!(db.upsert_provider(provider.clone(), None).is_err());
+        assert_eq!(
+            db.get_provider(&provider.id).unwrap().unwrap().vendor,
+            Vendor::Cloudflare
+        );
+        assert_eq!(
+            db.get_secret(&provider.id).unwrap().as_deref(),
+            Some("first")
+        );
+        db.upsert_provider(provider.clone(), Some("second"))
+            .unwrap();
+        provider.access_key_id = "other".into();
+        assert!(db.upsert_provider(provider.clone(), Some(" ")).is_err());
+        assert_eq!(
+            db.get_secret(&provider.id).unwrap().as_deref(),
+            Some("second")
+        );
+    }
 }

@@ -4,6 +4,12 @@ import 'design.dart';
 import 'main.dart' show confirm, prompt;
 import 'src/rust/api.dart' as rust;
 
+const _vendors = {
+  'cloudflare': 'Cloudflare',
+  'aliyun': 'Alibaba Cloud DNS',
+  'tencent': 'Tencent Cloud DNSPod',
+};
+
 class Certificates extends StatefulWidget {
   const Certificates({
     super.key,
@@ -52,8 +58,8 @@ class _CertificatesState extends State<Certificates> {
                     initialSelection: vendor,
                     label: Text(t('Provider', '服务商')),
                     dropdownMenuEntries: [
-                      for (final v in ['cloudflare', 'aliyun', 'tencent'])
-                        DropdownMenuEntry(value: v, label: v),
+                      for (final v in _vendors.entries)
+                        DropdownMenuEntry(value: v.key, label: v.value),
                     ],
                     onSelected: (v) {
                       if (v != null) update(() => vendor = v);
@@ -69,17 +75,23 @@ class _CertificatesState extends State<Certificates> {
                   if (vendor != 'cloudflare')
                     TextFormField(
                       initialValue: account,
-                      decoration: const InputDecoration(
-                        labelText: 'Access key ID',
+                      decoration: InputDecoration(
+                        labelText: vendor == 'tencent'
+                            ? 'SecretId'
+                            : 'AccessKey ID',
                       ),
-                      onChanged: (v) => account = v,
+                      onChanged: (v) => update(() => account = v),
                     ),
                   TextFormField(
                     obscureText: true,
                     autocorrect: false,
                     enableSuggestions: false,
                     decoration: InputDecoration(
-                      labelText: old == null
+                      labelText:
+                          old == null ||
+                              vendor != old.vendor ||
+                              (vendor != 'cloudflare' &&
+                                  account.trim() != old.account)
                           ? t('API secret', 'API 密钥')
                           : t('Replacement secret (optional)', '替换密钥（可选）'),
                     ),
@@ -119,7 +131,7 @@ class _CertificatesState extends State<Certificates> {
     final domains = await prompt(
       context,
       t('Issue certificate', '签发证书'),
-      t('Domain names, separated by commas', '域名，以逗号分隔'),
+      '${t('Domain names, separated by commas', '域名，以逗号分隔')}\n${t('Delegated DNS', '委派 DNS')} · domain=CNAME-target',
       '',
       t,
     );
@@ -127,9 +139,9 @@ class _CertificatesState extends State<Certificates> {
     if (!await confirm(
           context,
           t(
-            'Request a production certificate from Let’s Encrypt using ${p.name}?',
-            '使用 ${p.name} 向 Let’s Encrypt 申请生产证书？',
-          ),
+            'Request a production certificate from Let’s Encrypt using {name}?',
+            '使用 {name} 向 Let’s Encrypt 申请生产证书？',
+          ).replaceAll('{name}', p.name),
           t,
         ) ||
         !mounted) {
@@ -218,7 +230,7 @@ class _CertificatesState extends State<Certificates> {
                 for (final p in data.providers)
                   ListTile(
                     title: Text(p.name),
-                    subtitle: Text(p.vendor),
+                    subtitle: Text(_vendors[p.vendor] ?? p.vendor),
                     onTap: () => provider(p),
                     trailing: Wrap(
                       children: [
@@ -232,7 +244,10 @@ class _CertificatesState extends State<Certificates> {
                           onPressed: () async {
                             if (await confirm(
                               context,
-                              t('Delete ${p.name}?', '删除 ${p.name}？'),
+                              t(
+                                'Delete {name}?',
+                                '删除 {name}？',
+                              ).replaceAll('{name}', p.name),
                               t,
                             )) {
                               await change(() => rust.removeProvider(id: p.id));

@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::sync::{Mutex, RwLock, oneshot};
 use tokio::task::JoinSet;
@@ -104,7 +104,7 @@ impl Control {
                 "control stream opened"
             );
 
-            let timestamp = now_secs();
+            let timestamp = auth::unix_now_secs();
             let auth_digest = auth::compute_auth_digest(&cfg_snapshot.auth.token, timestamp);
             let login = Login {
                 version: VERSION.into(),
@@ -505,7 +505,7 @@ impl Control {
                 break;
             }
             tick.tick().await;
-            let timestamp = now_secs();
+            let timestamp = auth::unix_now_secs();
             let token = self.cfg.read().await.auth.token.clone();
             let ping = Ping {
                 auth_digest: auth::compute_auth_digest(&token, timestamp),
@@ -581,7 +581,7 @@ impl Control {
     async fn handle_req_data_conn(self: Arc<Self>) -> Result<()> {
         let mut data = self.connector.open().await?;
 
-        let timestamp = now_secs();
+        let timestamp = auth::unix_now_secs();
         let (session_id, token) = {
             let cfg = self.cfg.read().await;
             (self.session_id.clone(), cfg.auth.token.clone())
@@ -644,13 +644,6 @@ async fn read_while_reaping<R: AsyncRead + Unpin>(
             }
         }
     }
-}
-
-fn now_secs() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 fn hostname() -> String {

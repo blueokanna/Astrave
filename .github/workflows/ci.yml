@@ -119,7 +119,7 @@ jobs:
           adb -e shell wm size 540x1160
           adb -e shell wm density 240
           adb -e shell settings put system screen_off_timeout 1800000
-          python3 scripts/check-android-settings.py app/build/app/outputs/flutter-apk/app-x86_64-release.apk "$RUNNER_TEMP/screens"
+          python3 scripts/check-android-settings.py app/build/app/outputs/flutter-apk/app-x86_64-release.apk "$RUNNER_TEMP/screens" --extended
       - uses: actions/upload-artifact@v4
         if: always() && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
         with:
@@ -183,6 +183,9 @@ jobs:
 
       - name: Exercise encrypted tunnels and lossy UDP transports
         run: python3 scripts/check-tunnels.py target/release
+
+      - name: Exercise direct peer streams after rendezvous shutdown
+        run: python3 scripts/check-peer.py target/release/astrave
 
   desktop:
     if: inputs.release_version == ''

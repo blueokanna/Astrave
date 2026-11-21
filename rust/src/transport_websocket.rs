@@ -11,7 +11,11 @@
 use super::stream::{DynStream, boxed_stream};
 use crate::core::tls::PrefixedStream;
 use anyhow::{Context, Result, bail};
+use courierust::courierust_h1::{parse_request_line, parse_status_line, read_headers};
+use courierust::courierust_http::{Method, header::HeaderMap};
+use courierust::courierust_io::{BufReader, SliceReader};
 use courierust::courierust_ws::frame::{FrameHeader, Mask, OpCode};
+use courierust::courierust_ws::handshake;
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
 use std::net::SocketAddr;
@@ -70,8 +74,7 @@ pub async fn dial_websocket(
     crate::core::net::tune_tcp_stream(&stream, keepalive);
 
     let path = normalize_ws_path(path);
-    let key = courierust::courierust_ws::handshake::generate_key()
-        .map_err(|e| anyhow::anyhow!("websocket key: {e}"))?;
+    let key = handshake::generate_key().map_err(|e| anyhow::anyhow!("websocket key: {e}"))?;
     let request = format!(
         "GET {path} HTTP/1.1\r\n\
          Host: {host_header}\r\n\
@@ -89,15 +92,18 @@ pub async fn dial_websocket(
     stream.flush().await?;
 
     let (head, extra) = read_http_head(&mut stream).await?;
-    let head = std::str::from_utf8(&head).context("websocket upgrade response is not utf-8")?;
-    let mut lines = head.split("\r\n");
-    let status = lines.next().unwrap_or_default();
-    if !status.starts_with("HTTP/1.1 101") && !status.starts_with("HTTP/1.0 101") {
+    let (line, headers) = upgrade_headers(&head)?;
+    let (status, _) = parse_status_line(line)?;
+    if status.as_u16() != 101 {
         bail!("websocket upgrade rejected: {status}");
     }
-    let expected = courierust::courierust_ws::handshake::accept_key(&key)
-        .map_err(|e| anyhow::anyhow!("websocket accept key: {e}"))?;
-    if header_value(lines, "sec-websocket-accept") != Some(expected.as_str()) {
+    let expected =
+        handshake::accept_key(&key).map_err(|e| anyhow::anyhow!("websocket accept key: {e}"))?;
+    if headers
+        .get("sec-websocket-accept")
+        .and_then(|h| h.to_str().ok())
+        != Some(expected.as_str())
+    {
         bail!("websocket upgrade returned an invalid Sec-WebSocket-Accept");
     }
 
@@ -109,28 +115,30 @@ async fn server_upgrade(
     path: Option<&str>,
 ) -> Result<PrefixedStream<tokio::net::TcpStream>> {
     let (head, extra) = read_http_head(&mut stream).await?;
-    let head = std::str::from_utf8(&head).context("websocket upgrade request is not utf-8")?;
-    let mut lines = head.split("\r\n");
-    let request = lines.next().unwrap_or_default();
-    if !request.starts_with("GET ") {
+    let (line, headers) = upgrade_headers(&head)?;
+    let request = parse_request_line(line)?;
+    if request.method != Method::GET {
         bail!("websocket upgrade expects a GET request");
     }
     if let Some(path) = path
-        && request.split_ascii_whitespace().nth(1) != Some(normalize_ws_path(path).as_str())
+        && request.target.as_str() != normalize_ws_path(path)
     {
         bail!("unexpected websocket path");
     }
-    if !header_has_token(lines.clone(), "connection", "upgrade")
-        || !header_has_token(lines.clone(), "upgrade", "websocket")
+    if !handshake::header_has_token(&headers, "connection", "upgrade")
+        || !handshake::header_has_token(&headers, "upgrade", "websocket")
     {
         bail!("websocket upgrade headers missing");
     }
-    let key = header_value(lines, "sec-websocket-key").unwrap_or_default();
-    if !courierust::courierust_ws::handshake::is_valid_key(key) {
+    let key = headers
+        .get("sec-websocket-key")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or_default();
+    if !handshake::is_valid_key(key) {
         bail!("websocket upgrade key is invalid");
     }
-    let accept = courierust::courierust_ws::handshake::accept_key(key)
-        .map_err(|e| anyhow::anyhow!("websocket accept key: {e}"))?;
+    let accept =
+        handshake::accept_key(key).map_err(|e| anyhow::anyhow!("websocket accept key: {e}"))?;
 
     let reply = format!(
         "HTTP/1.1 101 Switching Protocols\r\n\
@@ -166,18 +174,15 @@ async fn read_http_head<S: AsyncRead + Unpin>(stream: &mut S) -> Result<(Vec<u8>
     bail!("websocket handshake exceeded {MAX_HANDSHAKE_BYTES} bytes")
 }
 
-fn header_value<'a>(lines: impl Iterator<Item = &'a str>, name: &str) -> Option<&'a str> {
-    lines
-        .filter_map(|line| line.split_once(':'))
-        .find_map(|(key, value)| key.trim().eq_ignore_ascii_case(name).then(|| value.trim()))
-}
-
-fn header_has_token<'a>(lines: impl Iterator<Item = &'a str>, name: &str, token: &str) -> bool {
-    header_value(lines, name).is_some_and(|value| {
-        value
-            .split(',')
-            .any(|item| item.trim().eq_ignore_ascii_case(token))
-    })
+fn upgrade_headers(head: &[u8]) -> Result<(&[u8], HeaderMap)> {
+    let line_end = head
+        .iter()
+        .position(|&b| b == b'\n')
+        .context("missing HTTP start line")?
+        + 1;
+    let (line, fields) = head.split_at(line_end);
+    let mut reader = BufReader::new(SliceReader::new(fields), fields.len());
+    Ok((line, read_headers(&mut reader)?))
 }
 
 /// Mask keys are not a security boundary (they exist so intermediaries do not
@@ -573,10 +578,18 @@ mod tests {
 
     #[test]
     fn header_lookup_is_case_insensitive() {
-        let head = "GET / HTTP/1.1\r\nUpgrade: WebSocket\r\nConnection: keep-alive, Upgrade\r\n";
-        let lines = head.split("\r\n");
-        assert_eq!(header_value(lines.clone(), "upgrade"), Some("WebSocket"));
-        assert!(header_has_token(lines.clone(), "connection", "upgrade"));
-        assert!(header_has_token(lines, "upgrade", "websocket"));
+        let head = b"GET / HTTP/1.1\r\nUpgrade: WebSocket\r\nConnection: keep-alive\r\nConnection: Upgrade\r\n\r\n";
+        let (line, headers) = upgrade_headers(head).unwrap();
+        assert_eq!(parse_request_line(line).unwrap().method, Method::GET);
+        assert!(handshake::header_has_token(
+            &headers,
+            "connection",
+            "upgrade"
+        ));
+        assert!(handshake::header_has_token(
+            &headers,
+            "upgrade",
+            "websocket"
+        ));
     }
 }

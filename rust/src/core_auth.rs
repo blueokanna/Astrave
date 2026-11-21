@@ -106,9 +106,9 @@ pub fn verify_login(
 }
 
 pub fn unix_now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
+    tzcraft::Ticks::now()
+        .and_then(tzcraft::Ticks::to_unix_seconds)
+        .map(|(seconds, _)| seconds)
         .unwrap_or(0)
 }
 

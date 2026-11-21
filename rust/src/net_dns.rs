@@ -4,8 +4,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use recurse_x::{Name, Resolver, ResolverConfig};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::time::{Instant, timeout, timeout_at};
@@ -123,7 +122,8 @@ pub async fn resolve_host(host: &str) -> Result<Vec<IpAddr>> {
     let name = Name::from_ascii(host).map_err(|e| anyhow!("invalid host name {host}: {e}"))?;
     let deadline = Instant::now() + LOOKUP_TIMEOUT;
 
-    if !degraded()
+    let degraded_until = *DEGRADED_UNTIL.lock().unwrap_or_else(|e| e.into_inner());
+    if degraded_until.is_none_or(|until| until <= Instant::now())
         && let Ok(slot) = RECURSIVE_WORKERS.try_acquire()
     {
         let lookup = tokio::task::spawn_blocking(move || {
@@ -133,7 +133,10 @@ pub async fn resolve_host(host: &str) -> Result<Vec<IpAddr>> {
         match timeout(Duration::from_secs(3), lookup).await {
             Ok(Ok(addrs)) if !addrs.is_empty() => return Ok(addrs),
             Ok(Err(err)) => tracing::debug!(%host, error = %err, "dns worker failed"),
-            _ => mark_degraded(),
+            _ => {
+                *DEGRADED_UNTIL.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some(Instant::now() + DEGRADED_WINDOW)
+            }
         }
     }
 
@@ -153,29 +156,7 @@ pub async fn resolve_host(host: &str) -> Result<Vec<IpAddr>> {
 /// How long the recursive resolver is skipped after it produced nothing.
 const DEGRADED_WINDOW: Duration = Duration::from_secs(60);
 
-fn degraded() -> bool {
-    degraded_until() > unix_now()
-}
-
-fn mark_degraded() {
-    DEGRADED_UNTIL.store(
-        unix_now() + DEGRADED_WINDOW.as_secs(),
-        AtomicOrdering::Relaxed,
-    );
-}
-
-fn degraded_until() -> u64 {
-    DEGRADED_UNTIL.load(AtomicOrdering::Relaxed)
-}
-
-fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-static DEGRADED_UNTIL: AtomicU64 = AtomicU64::new(0);
+static DEGRADED_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Resolves `host:port` to a socket address, preferring IPv4.
 ///

@@ -10,7 +10,27 @@ title: Android 与桌面客户端
 
 隧道列表按入站流量的方向排列，从映射端点指向本地服务。服务器确认分配后，行内显示可复制的实际端点。自动分配的端口在收到结果前显示为「自动」。「活动日志」显示最近 500 条记录。在「设置 → 证书」中添加 DNS 服务商后即可申请证书。
 
-在设置中可选择语言、明暗主题、系统动态色或预设配色。Android 悬浮导航胶囊支持纯色、高斯模糊、Aero Glass 着色玻璃和 Liquid Glass 风格。玻璃背景取样自胶囊下方的页面内容。Liquid Glass 在 Impeller 上增加边缘折射，其他渲染器使用模糊和半透明渐变；高对比度模式使用纯色。偏好会在重启后恢复。
+设置支持简体中文、繁体中文、英语、德语、法语、西班牙语、阿拉伯语、葡萄牙语、荷兰语、意大利语、罗马尼亚语、日语、韩语、印地语和俄语。「跟随系统」按系统偏好顺序匹配，阿拉伯语从右向左排版。AMOLED 使用纯黑背景，AMOLED Monet 在纯黑表面上使用系统动态色。系统未提供动态色时，可用所选种子色生成配色，共有 14 种预设。悬浮导航胶囊支持纯色、高斯模糊、Aero Glass 和 Liquid Glass，高对比度模式使用纯色。偏好在重启后恢复。
+
+活动日志用文字和图标标明 INFO、WARN 和 ERROR，支持同时按级别和关键词筛选。「设置 → 关于 Astrave」显示版本和进程资源占用。「检查更新」在启动时及前台运行期间每 15 分钟读取一次 GitHub 最新稳定版，也可以点击立即刷新。发现新版后，点击「下载更新」会按架构选包，核对字节数和 SHA-256，再交给系统打开。Android 需要在系统安装器中确认，macOS 打开磁盘映像，Linux 用包安装器。Windows 使用便携 ZIP，解压到新目录、关闭旧客户端后，从新目录启动。缺少对应架构的附件时会打开发布页。
+
+在 Android 13 x86_64 模拟器上，更新器下载开发版 APK 后，通过 FileProvider 交给系统安装器。确认安装后，系统报告版本号从 4001 升至 4002。两个包使用同一开发签名。在 Windows x64 上，更新器校验了正式发布的 v1.0.0 ZIP，并成功交给系统文件处理程序。
+
+### Windows 客户端 1.0.1
+
+四张截图来自同一次本机 TCP 会话。网关为 `local-api` 注册了 54751 端口；关闭网关后，活动日志记录了断线和重试。设置页同时列出了本地开发版本和 GitHub 最新正式版本。
+
+| 概览 | 配置 |
+| --- | --- |
+| ![已连接的 TCP 隧道和分配端点](/img/windows-1.0.1-overview.png) | ![当前会话的 TOML 配置](/img/windows-1.0.1-profile.png) |
+| **活动日志** | **设置** |
+| ![断线警告和重试记录](/img/windows-1.0.1-activity.png) | ![偏好设置、证书、检查更新和关于入口](/img/windows-1.0.1-settings.png) |
+
+### DNS-01 和验证委派
+
+在「设置 → 证书」中配置 Cloudflare、阿里云 DNS 或腾讯云 DNSPod，可自动写入临时 TXT 记录。多个申请域名以逗号分隔。自有域名用于花生壳或蒲公英时，可在权威 DNS 中先把 `_acme-challenge.app.example.org` 配置为 CNAME，指向由自己控制的 `_proof.validation.example.net`。选择管理 `validation.example.net` 的服务商，填入 `app.example.org=_proof.validation.example.net`。申请通配符时，填 `*.example.org=_proof.validation.example.net`，CNAME 设置在 `_acme-challenge.example.org`。客户端从原域名查询验证值，只清理本次创建的 TXT。使用此方式需要有权修改挑战名称的权威 DNS。服务商分配的域名若无此权限，需要绑定可自行管理的域名。
+
+### 此前版本的测量记录
 
 <img src="../img/android-settings-zh.png" alt="Android 13 模拟器中的中文设置和悬浮胶囊导航栏" width="320">
 

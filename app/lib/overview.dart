@@ -50,14 +50,24 @@ class Overview extends StatelessWidget {
                       connect: connect,
                       edit: edit,
                     ),
-                    if (session.error case final message?)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 12),
-                        child: SelectableText(
-                          message,
-                          style: TextStyle(color: theme.colorScheme.error),
+                    if (session.error case final message?) ...[
+                      const SizedBox(height: Space.small),
+                      Card.filled(
+                        color: theme.colorScheme.errorContainer,
+                        child: ListTile(
+                          leading: Icon(
+                            Icons.error_outline_rounded,
+                            color: theme.colorScheme.onErrorContainer,
+                          ),
+                          title: SelectableText(
+                            message,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.onErrorContainer,
+                            ),
+                          ),
                         ),
                       ),
+                    ],
                     const SizedBox(height: 24),
                     Row(
                       children: [
@@ -151,7 +161,8 @@ class _ConnectionCard extends StatelessWidget {
       'Stopping' => (t('Disconnecting', '正在断开'), Icons.link_off_rounded),
       _ => (t('Disconnected', '未连接'), Icons.link_off_rounded),
     };
-    final ink = colors.onPrimaryContainer, muted = colors.onSurfaceVariant;
+    final ink = colors.onPrimaryContainer,
+        muted = colors.onPrimaryContainer.withValues(alpha: .84);
     final accent = running
         ? colors.primary
         : session.active
@@ -184,123 +195,166 @@ class _ConnectionCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(22, 18, 18, 18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Wrap(
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        spacing: 8,
-                        children: [
-                          Icon(icon, color: accent, size: 20),
-                          Text(
-                            status,
-                            style: type.titleSmall?.copyWith(color: accent),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: t('Edit profile', '编辑配置'),
-                      onPressed: edit,
-                      color: ink,
-                      icon: const Icon(Icons.tune_rounded),
-                    ),
-                  ],
-                ),
-                LayoutBuilder(
-                  builder: (context, box) => Row(
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: AlignmentDirectional.topStart,
+                end: AlignmentDirectional.bottomEnd,
+                colors: [
+                  colors.primaryContainer,
+                  Color.lerp(
+                    colors.primaryContainer,
+                    colors.tertiaryContainer,
+                    .35,
+                  )!,
+                ],
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 18, 18, 18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
                     children: [
                       Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              t('Profile server', '配置的服务器'),
-                              style: type.labelMedium?.copyWith(color: muted),
+                        child: Align(
+                          alignment: AlignmentDirectional.centerStart,
+                          child: DecoratedBox(
+                            decoration: ShapeDecoration(
+                              shape: const StadiumBorder(),
+                              color: colors.surface.withValues(alpha: .85),
                             ),
-                            const SizedBox(height: 4),
-                            SelectableText(
-                              p.server,
-                              style: type.headlineMedium?.copyWith(
-                                fontFamily: 'monospace',
-                                color: ink,
-                                fontWeight: FontWeight.w600,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 6,
+                              ),
+                              child: Wrap(
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                spacing: 8,
+                                children: [
+                                  Icon(
+                                    icon,
+                                    color: running
+                                        ? colors.primary
+                                        : colors.onSurfaceVariant,
+                                    size: 16,
+                                  ),
+                                  Text(
+                                    status,
+                                    style: type.labelLarge?.copyWith(
+                                      color: colors.onSurface,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                          ],
+                          ),
                         ),
                       ),
-                      if (box.maxWidth >=
-                          540 * MediaQuery.textScalerOf(context).scale(12) / 12)
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 18),
-                          decoration: BoxDecoration(
-                            border: Border(
-                              left: BorderSide(color: colors.outlineVariant),
-                            ),
-                          ),
+                      IconButton(
+                        tooltip: t('Edit profile', '编辑配置'),
+                        onPressed: edit,
+                        color: ink,
+                        icon: const Icon(Icons.tune_rounded),
+                      ),
+                    ],
+                  ),
+                  LayoutBuilder(
+                    builder: (context, box) => Row(
+                      children: [
+                        Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                t('Registered tunnels', '已注册隧道'),
+                                t('Profile server', '配置的服务器'),
                                 style: type.labelMedium?.copyWith(color: muted),
                               ),
                               const SizedBox(height: 4),
-                              Text(
-                                '${running ? session.remotes.length : 0}',
+                              SelectableText(
+                                p.server,
                                 style: type.headlineMedium?.copyWith(
-                                  fontFamily: 'monospace',
-                                  color: accent,
+                                  letterSpacing: -.4,
+                                  color: ink,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ],
                           ),
                         ),
+                        if (box.maxWidth >=
+                            540 *
+                                MediaQuery.textScalerOf(context).scale(12) /
+                                12)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 18),
+                            decoration: BoxDecoration(
+                              border: BorderDirectional(
+                                start: BorderSide(color: colors.outlineVariant),
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  t('Registered tunnels', '已注册隧道'),
+                                  style: type.labelMedium?.copyWith(
+                                    color: muted,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  '${running ? session.remotes.length : 0}',
+                                  style: type.headlineMedium?.copyWith(
+                                    fontFamily: 'monospace',
+                                    color: accent,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: session.busy ? null : connect,
+                        icon: Icon(
+                          session.active
+                              ? Icons.stop_rounded
+                              : Icons.play_arrow_rounded,
+                        ),
+                        label: Text(
+                          session.active
+                              ? t('Disconnect', '断开连接')
+                              : t('Connect', '连接'),
+                        ),
+                      ),
+                      if (session.active && session.reloadPending)
+                        TextButton(
+                          style: TextButton.styleFrom(
+                            foregroundColor: colors.onPrimaryContainer,
+                          ),
+                          onPressed: edit,
+                          child: Text(
+                            t('Saved changes pending reload', '已保存更改，等待重载'),
+                          ),
+                        ),
                     ],
                   ),
-                ),
-                const SizedBox(height: 16),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 6,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    FilledButton.icon(
-                      onPressed: session.busy ? null : connect,
-                      icon: Icon(
-                        session.active
-                            ? Icons.stop_rounded
-                            : Icons.play_arrow_rounded,
-                      ),
-                      label: Text(
-                        session.active
-                            ? t('Disconnect', '断开连接')
-                            : t('Connect', '连接'),
-                      ),
-                    ),
-                    if (session.active && session.reloadPending)
-                      TextButton(
-                        style: TextButton.styleFrom(
-                          foregroundColor: colors.onPrimaryContainer,
-                        ),
-                        onPressed: edit,
-                        child: Text(
-                          t('Saved changes pending reload', '已保存更改，等待重载'),
-                        ),
-                      ),
-                  ],
-                ),
-              ],
+                ],
+              ),
             ),
           ),
           ColoredBox(
-            color: colors.surfaceContainerHigh,
+            color: colors.surfaceContainerLow,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
               child: LayoutBuilder(
@@ -380,9 +434,10 @@ class _TunnelRow extends StatelessWidget {
         : t('Public endpoint', '映射端点');
     return Padding(
       padding: const EdgeInsets.only(top: 6),
-      child: Card.outlined(
+      child: Card.filled(
+        color: colors.surfaceContainerLow,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 6, 12),
+          padding: const EdgeInsetsDirectional.fromSTEB(16, 14, 6, 14),
           child: Row(
             children: [
               Expanded(

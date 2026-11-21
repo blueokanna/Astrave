@@ -15,6 +15,8 @@ import 'android_tls.dart';
 import 'certificates.dart';
 import 'design.dart';
 import 'desktop_tray.dart';
+import 'language.dart';
+import 'updates.dart';
 import 'navigation_capsule.dart';
 import 'overview.dart';
 import 'session.dart';
@@ -46,11 +48,12 @@ class AstraveApp extends StatefulWidget {
 class _AstraveAppState extends State<AstraveApp> with WidgetsBindingObserver {
   late final Future<String> _defaultPath = _initialize();
   Appearance appearance = const Appearance();
-  bool get chinese =>
-      appearance.language == AppLanguage.zh ||
-      (appearance.language == AppLanguage.system &&
-          WidgetsBinding.instance.platformDispatcher.locale.languageCode ==
-              'zh');
+  Messages messages = const Messages({});
+  AppLanguage get language => appearance.language.resolve(
+    WidgetsBinding.instance.platformDispatcher.locales,
+  );
+  String text(String en, String zh) => messages.text(language, en, zh);
+  final updates = ReleaseUpdates();
   Future<void> saving = Future.value();
   final messenger = GlobalKey<ScaffoldMessengerState>();
   final prefs = SharedPreferencesAsync();
@@ -62,9 +65,11 @@ class _AstraveAppState extends State<AstraveApp> with WidgetsBindingObserver {
     final dir = await getApplicationSupportDirectory();
     final path = await rust.initialize(directory: dir.path);
     appearance = await Appearance.load(prefs);
+    messages = await Messages.load();
     if (mounted) {
+      updates.start();
       if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-        tray = DesktopTray()..install(chinese);
+        tray = DesktopTray()..install(text);
       }
       setState(() {});
     }
@@ -80,19 +85,19 @@ class _AstraveAppState extends State<AstraveApp> with WidgetsBindingObserver {
   @override
   void didChangeLocales(List<Locale>? locales) {
     if (appearance.language == AppLanguage.system) {
-      tray?.localize(chinese);
+      tray?.localize(text);
       setState(() {});
     }
   }
 
   void updateAppearance(Appearance next) {
     setState(() => appearance = next);
-    tray?.localize(chinese);
+    tray?.localize(text);
     saving = saving.then((_) => next.save(prefs)).catchError((Object e) {
       messenger.currentState?.showSnackBar(
         SnackBar(
           content: Text(
-            chinese ? '保存偏好设置失败：$e' : 'Could not save preferences: $e',
+            '${text('Could not save preferences', '无法保存偏好设置')}\n$e',
           ),
         ),
       );
@@ -103,6 +108,7 @@ class _AstraveAppState extends State<AstraveApp> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     tray?.dispose();
+    updates.dispose();
     super.dispose();
   }
 
@@ -112,20 +118,30 @@ class _AstraveAppState extends State<AstraveApp> with WidgetsBindingObserver {
       title: 'Astrave',
       debugShowCheckedModeBanner: false,
       scaffoldMessengerKey: messenger,
-      locale: Locale(chinese ? 'zh' : 'en'),
-      supportedLocales: const [Locale('en'), Locale('zh')],
+      locale: language.locale,
+      supportedLocales: AppLanguage.values.map((e) => e.locale).nonNulls,
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
       theme: desktopTheme(
         Brightness.light,
         light,
+        simplifiedChinese: language == AppLanguage.zh,
         seed: appearance.palette.seed,
       ),
       darkTheme: desktopTheme(
         Brightness.dark,
-        dark,
+        appearance.theme == AppTheme.amoled ? null : dark,
+        simplifiedChinese: language == AppLanguage.zh,
         seed: appearance.palette.seed,
+        blackSurface:
+            appearance.theme == AppTheme.amoled ||
+            appearance.theme == AppTheme.amoledMonet,
+        preferDynamic: appearance.theme == AppTheme.amoledMonet,
       ),
-      themeMode: appearance.theme,
+      themeMode: switch (appearance.theme) {
+        AppTheme.system => ThemeMode.system,
+        AppTheme.light => ThemeMode.light,
+        _ => ThemeMode.dark,
+      },
       themeAnimationStyle: MediaQuery.disableAnimationsOf(context)
           ? AnimationStyle.noAnimation
           : const AnimationStyle(
@@ -147,7 +163,8 @@ class _AstraveAppState extends State<AstraveApp> with WidgetsBindingObserver {
           }
           return Workspace(
             initialPath: widget.profilePath ?? state.requireData,
-            text: (en, zh) => chinese ? zh : en,
+            text: text,
+            updates: updates,
             hide: tray?.visible == true ? tray!.hide : null,
             appearance: appearance,
             updateAppearance: updateAppearance,
@@ -165,11 +182,13 @@ class Workspace extends StatefulWidget {
     required this.text,
     required this.appearance,
     required this.updateAppearance,
+    required this.updates,
     this.hide,
   });
   final String initialPath;
   final LocalText text;
   final Appearance appearance;
+  final ReleaseUpdates updates;
   final ValueChanged<Appearance> updateAppearance;
   final VoidCallback? hide;
   @override
@@ -308,9 +327,20 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   Widget profilePanel(Session s) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      SelectableText(
-        s.profile.path,
-        style: Theme.of(context).textTheme.bodyMedium,
+      Row(
+        children: [
+          Icon(
+            Icons.description_outlined,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: SelectableText(
+              s.profile.path,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
+        ],
       ),
       const SizedBox(height: Space.medium),
       TextField(
@@ -319,8 +349,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         maxLines: 24,
         autocorrect: false,
         enableSuggestions: false,
+        textDirection: TextDirection.ltr,
         style: const TextStyle(fontFamily: 'monospace'),
-        decoration: const InputDecoration(
+        decoration: InputDecoration(
+          fillColor: Theme.of(context).colorScheme.surfaceContainerLow,
           labelText: 'TOML',
           alignLabelWithHint: true,
         ),
@@ -403,7 +435,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
         }
       } else {
         final initial = index == null
-            ? '[[tunnels]]\nname = ""\nprotocol = "tcp"\nservice = "127.0.0.1:8000"\nremotePort = 0\n'
+            ? '[[tunnels]]\nname = ""\nprotocol = "tcp"\nservice = "127.0.0.1:8000"\nremotePort = 9000\n'
             : await rust.tunnelSource(source: s.profile.source, index: index);
         if (!mounted) return;
         fragment = await prompt(
@@ -444,6 +476,7 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       showAboutDialog(
         context: context,
         applicationName: 'Astrave',
+        applicationVersion: widget.updates.installed?.toString(),
         applicationLegalese: t(
           'Uses Google Sans and HarmonyOS Sans fonts.',
           '使用 Google Sans 和 HarmonyOS Sans 字体。',
@@ -470,20 +503,12 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     final s = session;
     final wide = !Platform.isAndroid && MediaQuery.sizeOf(context).width >= 800;
     final actions = [
-      ActionsMenu(
-        tooltip: t('More', '更多'),
-        children: [
-          MenuItemButton(
-            onPressed: about,
-            child: Text(t('About Astrave', '关于 Astrave')),
-          ),
-          if (widget.hide != null)
-            MenuItemButton(
-              onPressed: widget.hide,
-              child: Text(t('Hide to tray', '隐藏到托盘')),
-            ),
-        ],
-      ),
+      if (widget.hide != null)
+        IconButton(
+          tooltip: t('Hide to tray', '隐藏到托盘'),
+          onPressed: widget.hide,
+          icon: const Icon(Icons.minimize_rounded),
+        ),
     ];
     if (s == null || failure != null) {
       return Scaffold(
@@ -538,6 +563,8 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       1 => ListenableBuilder(listenable: s, builder: (_, _) => profilePanel(s)),
       2 => ActivityPanel(logs: s.logs, filter: logFilter, text: t),
       _ => SettingsPanel(
+        about: about,
+        updates: UpdateTile(updates: widget.updates, text: t),
         value: widget.appearance,
         text: t,
         onChanged: widget.updateAppearance,

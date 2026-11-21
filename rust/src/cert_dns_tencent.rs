@@ -2,13 +2,10 @@ use super::DnsProvider;
 use crate::{http::Method, proto::hex};
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
-use hmac::{Hmac, KeyInit, Mac};
-use serde::Deserialize;
-use serde_json::json;
-use sha2::{Digest, Sha256};
+use courierust::courierust_crypto::sha256::sha256_hex;
+use nextjson::{NsonDeserialize, Value, json};
+use ring::hmac;
 use tzcraft::{Ticks, Zone};
-
-type HmacSha256 = Hmac<Sha256>;
 
 pub struct TencentDns {
     secret_id: String,
@@ -16,14 +13,14 @@ pub struct TencentDns {
 }
 
 impl TencentDns {
-    pub fn new(secret_id: &str, secret_key: &str) -> Result<Self> {
-        Ok(Self {
+    pub fn new(secret_id: &str, secret_key: &str) -> Self {
+        Self {
             secret_id: secret_id.to_string(),
             secret_key: secret_key.to_string(),
-        })
+        }
     }
 
-    async fn call(&self, action: &str, payload: serde_json::Value) -> Result<serde_json::Value> {
+    async fn call(&self, action: &str, payload: Value) -> Result<Value> {
         let host = "dnspod.tencentcloudapi.com";
         let service = "dnspod";
         let version = "2021-03-23";
@@ -31,7 +28,7 @@ impl TencentDns {
         let timestamp = instant.to_unix_seconds()?.0;
         let date = instant.to_zoned(Zone::Utc).date()?.to_iso();
         let body = payload.to_string();
-        let hashed_payload = hex::encode(&Sha256::digest(body.as_bytes()));
+        let hashed_payload = sha256_hex(body.as_bytes());
 
         let canonical_headers = format!(
             "content-type:application/json; charset=utf-8\nhost:{host}\nx-tc-action:{}\n",
@@ -40,7 +37,7 @@ impl TencentDns {
         let signed_headers = "content-type;host;x-tc-action";
         let canonical_request =
             format!("POST\n/\n\n{canonical_headers}\n{signed_headers}\n{hashed_payload}");
-        let hashed_canonical = hex::encode(&Sha256::digest(canonical_request.as_bytes()));
+        let hashed_canonical = sha256_hex(canonical_request.as_bytes());
         let credential_scope = format!("{date}/{service}/tc3_request");
         let string_to_sign =
             format!("TC3-HMAC-SHA256\n{timestamp}\n{credential_scope}\n{hashed_canonical}");
@@ -49,9 +46,10 @@ impl TencentDns {
             format!("TC3{}", self.secret_key).as_bytes(),
             date.as_bytes(),
         );
-        let secret_service = hmac_sha256(&secret_date, service.as_bytes());
-        let secret_signing = hmac_sha256(&secret_service, b"tc3_request");
-        let signature = hex::encode(&hmac_sha256(&secret_signing, string_to_sign.as_bytes()));
+        let secret_service = hmac_sha256(secret_date.as_ref(), service.as_bytes());
+        let secret_signing = hmac_sha256(secret_service.as_ref(), b"tc3_request");
+        let signature =
+            hex::encode(hmac_sha256(secret_signing.as_ref(), string_to_sign.as_bytes()).as_ref());
 
         let authorization = format!(
             "TC3-HMAC-SHA256 Credential={}/{}, SignedHeaders={signed_headers}, Signature={signature}",
@@ -69,30 +67,20 @@ impl TencentDns {
         let v: TcResp = super::json(Method::POST, &url, &headers, &body)
             .await
             .context("tencent DNS request")?;
-        if let Some(err) = v.response.error {
-            bail!("tencent dns error: {} - {}", err.code, err.message);
-        }
-        let mut data = v.response.extra;
-        if let Some(m) = data.as_object_mut() {
-            m.remove("RequestId");
-            m.remove("Error");
-        }
-        Ok(data)
+        v.into_result()
     }
 
     async fn find_domain(&self, host: &str) -> Result<(u64, String, String)> {
-        let host = host.trim_end_matches('.');
         let listed = self
             .call("DescribeDomainList", json!({"Limit": 100, "Offset": 0}))
             .await?;
         let domains = listed
             .get("DomainList")
             .and_then(|v| v.as_array())
-            .cloned()
+            .map(Vec::as_slice)
             .unwrap_or_default();
-        let mut name = host.to_string();
-        loop {
-            for d in &domains {
+        for (name, rr) in super::zone_candidates(host) {
+            for d in domains {
                 let dn = d.get("Name").and_then(|v| v.as_str()).unwrap_or("");
                 let id = d
                     .get("DomainId")
@@ -103,26 +91,10 @@ impl TencentDns {
                             .and_then(|s| s.parse().ok())
                     })
                     .unwrap_or(0);
-                if !dn.is_empty() && dn.eq_ignore_ascii_case(&name) {
-                    let rr = if host.eq_ignore_ascii_case(&name) {
-                        "@".to_string()
-                    } else {
-                        host.strip_suffix(&format!(".{name}"))
-                            .or_else(|| {
-                                let lower = name.to_ascii_lowercase();
-                                host.strip_suffix(&format!(".{lower}"))
-                            })
-                            .unwrap_or(host)
-                            .to_string()
-                    };
+                if !dn.is_empty() && dn.eq_ignore_ascii_case(name) {
                     tracing::info!(%host, domain = %dn, domain_id = id, %rr, "cert: tencent resolve zone");
-                    return Ok((id, dn.to_string(), rr));
+                    return Ok((id, dn.to_string(), rr.to_owned()));
                 }
-            }
-            if let Some((_, rest)) = name.split_once('.') {
-                name = rest.to_string();
-            } else {
-                break;
             }
         }
         Err(anyhow!("tencent domain not found for {host}"))
@@ -131,7 +103,7 @@ impl TencentDns {
 
 #[async_trait]
 impl DnsProvider for TencentDns {
-    async fn upsert_txt(&self, host: &str, value: &str) -> Result<String> {
+    async fn upsert_txt(&self, host: &str, value: &str) -> Result<Option<String>> {
         let (domain_id, domain, rr) = self.find_domain(host).await?;
 
         let mut list_body = json!({
@@ -141,7 +113,10 @@ impl DnsProvider for TencentDns {
             "Limit": 100,
         });
         if domain_id > 0 {
-            list_body["DomainId"] = json!(domain_id);
+            list_body
+                .as_object_mut()
+                .expect("object literal")
+                .insert("DomainId".into(), domain_id.into());
         }
         let listed = self.call("DescribeRecordList", list_body).await;
         if let Ok(listed) = listed
@@ -156,7 +131,7 @@ impl DnsProvider for TencentDns {
                 }
                 if content == value && id > 0 {
                     tracing::info!(%host, %id, "cert: tencent txt already present");
-                    return Ok(format!("{domain}:{id}"));
+                    return Ok(None);
                 }
             }
         }
@@ -170,7 +145,10 @@ impl DnsProvider for TencentDns {
             "TTL": 600,
         });
         if domain_id > 0 {
-            create_body["DomainId"] = json!(domain_id);
+            create_body
+                .as_object_mut()
+                .expect("object literal")
+                .insert("DomainId".into(), domain_id.into());
         }
         let created = self.call("CreateRecord", create_body).await?;
         let id = created
@@ -178,7 +156,7 @@ impl DnsProvider for TencentDns {
             .and_then(|v| v.as_u64())
             .ok_or_else(|| anyhow!("tencent missing RecordId"))?;
         tracing::info!(%host, %id, %domain, "cert: tencent txt upserted");
-        Ok(format!("{domain}:{id}"))
+        Ok(Some(format!("{domain}:{id}")))
     }
 
     async fn delete_txt(&self, record_id: &str) -> Result<()> {
@@ -204,30 +182,50 @@ impl DnsProvider for TencentDns {
     }
 }
 
-fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
-    let mut mac = HmacSha256::new_from_slice(key).expect("hmac");
-    mac.update(data);
-    mac.finalize().into_bytes().to_vec()
+fn hmac_sha256(key: &[u8], data: &[u8]) -> hmac::Tag {
+    hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, key), data)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(NsonDeserialize)]
 struct TcResp {
-    #[serde(rename = "Response")]
-    response: TcResponse,
+    #[njson(rename = "Response")]
+    response: Value,
 }
 
-#[derive(Debug, Deserialize)]
-struct TcResponse {
-    #[serde(rename = "Error")]
-    error: Option<TcError>,
-    #[serde(flatten)]
-    extra: serde_json::Value,
+impl TcResp {
+    fn into_result(self) -> Result<Value> {
+        let fields = self
+            .response
+            .as_object()
+            .context("invalid Tencent DNS response")?;
+        if let Some(error) = fields.get("Error").filter(|value| !value.is_null()) {
+            let code = error["Code"]
+                .as_str()
+                .context("missing Tencent error code")?;
+            let message = error["Message"]
+                .as_str()
+                .context("missing Tencent error message")?;
+            bail!("tencent dns error: {code} - {message}");
+        }
+        Ok(self.response)
+    }
 }
 
-#[derive(Debug, Deserialize)]
-struct TcError {
-    #[serde(rename = "Code")]
-    code: String,
-    #[serde(rename = "Message")]
-    message: String,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_dnspod_results_and_errors_in_http_successes() {
+        let ok: TcResp =
+            nextjson::nextdecode(br#"{"Response":{"RecordId":123,"RequestId":"req"}}"#).unwrap();
+        assert_eq!(ok.into_result().unwrap()["RecordId"].as_u64(), Some(123));
+        let err: TcResp = nextjson::nextdecode(br#"{"Response":{"Error":{"Code":"AuthFailure","Message":"invalid credential"},"RequestId":"req"}}"#).unwrap();
+        assert!(
+            err.into_result()
+                .unwrap_err()
+                .to_string()
+                .contains("AuthFailure")
+        );
+    }
 }

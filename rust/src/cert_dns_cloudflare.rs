@@ -2,28 +2,27 @@ use super::DnsProvider;
 use crate::http::Method;
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
-use serde::Deserialize;
-use serde_json::json;
+use nextjson::{NsonDeserialize, Value, json};
 
 pub struct CloudflareDns {
     token: String,
 }
 
 impl CloudflareDns {
-    pub fn new(token: &str) -> Result<Self> {
-        Ok(Self {
+    pub fn new(token: &str) -> Self {
+        Self {
             token: token.to_string(),
-        })
+        }
     }
 
-    async fn call<T: serde::de::DeserializeOwned>(
+    async fn call<T: for<'de> NsonDeserialize<'de>>(
         &self,
         method: Method,
         url: &str,
         body: &str,
-    ) -> Result<T> {
+    ) -> Result<CfResp<T>> {
         let auth = format!("Bearer {}", self.token);
-        super::json(
+        let response: CfResp<T> = super::json(
             method,
             url,
             &[
@@ -32,28 +31,28 @@ impl CloudflareDns {
             ],
             body,
         )
-        .await
+        .await?;
+        if !response.success {
+            bail!("cloudflare DNS error: {:?}", response.errors);
+        }
+        Ok(response)
     }
 
-    async fn find_zone(&self, domain: &str) -> Result<(String, String)> {
-        let mut name = domain.trim_end_matches('.').to_string();
-        loop {
+    async fn find_zone(&self, domain: &str) -> Result<String> {
+        for (name, _) in super::zone_candidates(domain) {
             let url =
                 format!("https://api.cloudflare.com/client/v4/zones?name={name}&status=active");
             let resp: CfResp<Vec<CfZone>> = self
                 .call(Method::GET, &url, "")
                 .await
                 .context("cloudflare list zones")?;
-            if !resp.success {
-                bail!("cloudflare zones error: {:?}", resp.errors);
-            }
-            if let Some(z) = resp.result.into_iter().next() {
-                return Ok((z.id, z.name));
-            }
-            if let Some((_, rest)) = name.split_once('.') {
-                name = rest.to_string();
-            } else {
-                break;
+            if let Some(z) = resp
+                .result
+                .context("missing Cloudflare zone list")?
+                .into_iter()
+                .next()
+            {
+                return Ok(z.id);
             }
         }
         Err(anyhow!("cloudflare zone not found for {domain}"))
@@ -62,16 +61,9 @@ impl CloudflareDns {
 
 #[async_trait]
 impl DnsProvider for CloudflareDns {
-    async fn upsert_txt(&self, host: &str, value: &str) -> Result<String> {
+    async fn upsert_txt(&self, host: &str, value: &str) -> Result<Option<String>> {
         let host = host.trim_end_matches('.');
-        let (zone_id, zone_name) = self.find_zone(host).await?;
-        let relative = if host == zone_name {
-            "@".to_string()
-        } else if let Some(prefix) = host.strip_suffix(&format!(".{zone_name}")) {
-            prefix.to_string()
-        } else {
-            host.to_string()
-        };
+        let zone_id = self.find_zone(host).await?;
 
         let list_url = format!(
             "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=TXT&name={host}"
@@ -80,21 +72,18 @@ impl DnsProvider for CloudflareDns {
             .call(Method::GET, &list_url, "")
             .await
             .context("cloudflare list txt")?;
-        if !listed.success {
-            bail!("cloudflare list txt failed: {:?}", listed.errors);
-        }
-
-        if let Some(existing) = listed
+        if listed
             .result
+            .context("missing Cloudflare TXT list")?
             .iter()
-            .find(|r| r.content.trim_matches('"') == value)
+            .any(|r| r.content.trim_matches('"') == value)
         {
-            return Ok(format!("{zone_id}:{}", existing.id));
+            return Ok(None);
         }
 
         let body = json!({
             "type": "TXT",
-            "name": relative,
+            "name": host,
             "content": value,
             "ttl": 120,
         });
@@ -104,11 +93,9 @@ impl DnsProvider for CloudflareDns {
             .call(Method::POST, &create_url, &body.to_string())
             .await
             .context("cloudflare create txt")?;
-        if !created.success {
-            bail!("cloudflare create txt failed: {:?}", created.errors);
-        }
+        let record = created.result.context("missing Cloudflare TXT record")?;
         tracing::info!(%host, "cert: cloudflare txt upserted");
-        Ok(format!("{zone_id}:{}", created.result.id))
+        Ok(Some(format!("{zone_id}:{}", record.id)))
     }
 
     async fn delete_txt(&self, record_id: &str) -> Result<()> {
@@ -116,36 +103,46 @@ impl DnsProvider for CloudflareDns {
             bail!("invalid cloudflare record id");
         };
         let url = format!("https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{id}");
-        let resp: CfResp<serde_json::Value> = self
-            .call(Method::DELETE, &url, "")
+        self.call::<Value>(Method::DELETE, &url, "")
             .await
             .context("cloudflare delete txt")?;
-        if !resp.success {
-            bail!("cloudflare delete txt failed: {:?}", resp.errors);
-        }
         Ok(())
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, NsonDeserialize)]
 struct CfResp<T> {
     success: bool,
-    #[serde(default)]
-    result: T,
-    #[serde(default)]
-    errors: Vec<serde_json::Value>,
+    result: Option<T>,
+    #[njson(default = "Vec::new")]
+    errors: Vec<Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, NsonDeserialize)]
 struct CfZone {
     id: String,
-    name: String,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, NsonDeserialize)]
 struct CfRecord {
-    #[serde(default)]
     id: String,
-    #[serde(default)]
+    #[njson(default)]
     content: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_create_and_error_envelopes() {
+        let ok: CfResp<CfRecord> = nextjson::nextdecode(
+            br#"{"success":true,"result":{"id":"txt1","content":"challenge"}}"#,
+        )
+        .unwrap();
+        assert_eq!(ok.result.unwrap().id, "txt1");
+        let error: CfResp<Vec<CfZone>> = nextjson::nextdecode(br#"{"success":false,"result":null,"errors":[{"code":10000,"message":"Authentication error"}]}"#).unwrap();
+        assert!(!error.success);
+        assert_eq!(error.errors[0]["code"].as_u64(), Some(10000));
+    }
 }

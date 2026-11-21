@@ -1,0 +1,22 @@
+[Unit]
+Description=Astrave %i
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=astrave
+Group=astrave
+WorkingDirectory=/etc/astrave/%i
+ExecStart=/usr/local/bin/astrave %i -c config.toml
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

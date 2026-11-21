@@ -1,14 +1,14 @@
 use astrave_desktop::http::{Method, StatusCode, Url, request};
-use serde::Deserialize;
+use nextjson::NsonDeserialize;
 use std::{env, error::Error, fmt::Write, time::Duration};
 
-#[derive(Deserialize)]
+#[derive(NsonDeserialize)]
 pub struct Release {
     tag_name: String,
     assets: Vec<Asset>,
 }
 
-#[derive(Deserialize)]
+#[derive(NsonDeserialize)]
 struct Asset {
     name: String,
     size: u64,

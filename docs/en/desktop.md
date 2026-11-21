@@ -10,7 +10,27 @@ Open a TOML file under Profile, validate and save it, then connect from Overview
 
 Tunnel rows show the path incoming traffic follows from the public endpoint to the local service. Copy the assigned endpoint from the row menu once the server confirms it. A dynamically assigned port reads **Automatic** until the endpoint arrives. Activity shows the most recent 500 log entries. Open **Settings → Certificates** to configure a DNS provider and request a certificate.
 
-Settings also controls language, light or dark appearance, dynamic color and seed palettes. On Android the floating navigation capsule can use a solid surface, Gaussian blur, tinted Aero Glass or Liquid Glass styling. The glass styles sample the content beneath the capsule. Liquid Glass adds edge refraction on Impeller and uses a translucent gradient over blur on other renderers. High contrast selects the solid surface. Your choices persist across restarts.
+Settings offers Simplified and Traditional Chinese, English, German, French, Spanish, Arabic, Portuguese, Dutch, Italian, Romanian, Japanese, Korean, Hindi and Russian. System default follows the first supported preferred language. Arabic uses a right-to-left layout. Choose AMOLED for a black background, or AMOLED Monet for black surfaces with system accent colors. Where system colors are unavailable, the app generates colors from the selected seed. Fourteen seeds are available. The floating navigation capsule supports solid, Gaussian blur, Aero Glass and Liquid Glass styles. High contrast uses a solid surface. Choices persist across restarts.
+
+Activity labels INFO, WARN and ERROR and combines severity filtering with text search. **Settings → About Astrave** shows version and process usage. **Check for updates** reads the latest stable GitHub Release on startup and every 15 minutes while in the foreground. Tap it to refresh immediately. When a newer build is available, **Download update** checks the selected architecture, byte count and SHA-256 before opening the package. Approve the Android installer, open the macOS disk image or use the Linux package installer. On Windows extract the portable ZIP to a new folder, close the old copy and launch the executable in the new folder. If no matching asset is published, the app opens the release page.
+
+On an Android 13 x86_64 emulator, the updater downloaded the development APK, shared it with the system installer through FileProvider, and upgraded a test build from version code 4001 to 4002 after confirmation. Both packages used the same development key. On Windows x64, the updater verified the published v1.0.0 ZIP and successfully handed it to the system file handler.
+
+### Windows client, version 1.0.1
+
+These screenshots show the Simplified Chinese interface during one loopback TCP session. The gateway assigned port 54751 to `local-api`. After the gateway stopped, Activity recorded the disconnect and retry. Settings shows the installed development version alongside the latest published GitHub release.
+
+| Overview | Profile |
+| --- | --- |
+| ![Connected TCP tunnel and assigned endpoint](/img/windows-1.0.1-overview.png) | ![TOML profile for the connected session](/img/windows-1.0.1-profile.png) |
+| **Activity** | **Settings** |
+| ![Disconnection warning and reconnect events](/img/windows-1.0.1-activity.png) | ![Preferences, certificates, updates and About](/img/windows-1.0.1-settings.png) |
+
+### DNS-01 and delegated zones
+
+**Settings → Certificates** can create temporary TXT records with credentials for Cloudflare, Alibaba Cloud DNS and Tencent DNSPod. Enter the certificate names separated by commas. For a hostname you control on Oray, including one used with PeanutHull or 贝锐蒲公英, first publish a CNAME from `_acme-challenge.app.example.org` to an owner you control, such as `_proof.validation.example.net`. Select the provider for `validation.example.net` and enter `app.example.org=_proof.validation.example.net`. For a wildcard use `*.example.org=_proof.validation.example.net` and place the CNAME at `_acme-challenge.example.org`. The client checks propagation through the original name and cleans up TXT records it created. This requires permission to edit the challenge name’s authoritative DNS. A provider-issued hostname with no DNS editing rights requires a custom domain under your control.
+
+### Earlier release measurements
 
 <img src="../img/android-settings.png" alt="Settings on an Android 13 emulator with the floating navigation capsule" width="320">
 

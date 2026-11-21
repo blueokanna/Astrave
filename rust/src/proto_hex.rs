@@ -16,11 +16,12 @@ pub fn encode(bytes: &[u8]) -> String {
 
 /// Decodes exactly `out.len()` bytes; trailing or truncated input is rejected.
 pub fn decode_into(input: &[u8], out: &mut [u8]) -> Option<()> {
-    if input.len() != out.len() * 2 {
+    let (pairs, remainder) = input.as_chunks::<2>();
+    if !remainder.is_empty() || pairs.len() != out.len() {
         return None;
     }
-    for (i, chunk) in input.chunks_exact(2).enumerate() {
-        out[i] = (nibble(chunk[0])? << 4) | nibble(chunk[1])?;
+    for (byte, &[hi, lo]) in out.iter_mut().zip(pairs) {
+        *byte = (nibble(hi)? << 4) | nibble(lo)?;
     }
     Some(())
 }

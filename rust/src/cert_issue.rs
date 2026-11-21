@@ -1,4 +1,4 @@
-use super::dns::{self, DnsProvider};
+use super::dns;
 use super::model::Cert;
 use super::store::{self, Store};
 use anyhow::{Context, Result, bail};
@@ -6,6 +6,7 @@ use instant_acme::{
     Account, AuthorizationStatus, ChallengeType, Identifier, LetsEncrypt, NewAccount, NewOrder,
     OrderStatus, RetryPolicy,
 };
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,7 +34,52 @@ pub struct IssueRequest {
 struct PendingTxt {
     host: String,
     value: String,
-    record_id: String,
+    created_id: Option<String>,
+}
+
+// A CNAME delegation changes only the TXT owner. The original identifier is
+// still sent to the CA and is always used to check propagation.
+fn challenge_domains(entries: &[String]) -> Result<(Vec<String>, BTreeMap<String, String>)> {
+    let mut domains = Vec::new();
+    let mut owners = BTreeMap::new();
+    for entry in entries {
+        let (domain, alias) = entry
+            .split_once('=')
+            .map_or((entry.as_str(), None), |(d, a)| (d, Some(a)));
+        let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+        let host = dns::challenge_name(&domain);
+        let owner = alias
+            .map(|s| s.trim().trim_end_matches('.').to_ascii_lowercase())
+            .unwrap_or_else(|| host.clone());
+        let valid = |name: &str, underscore: bool| {
+            name.len() <= 253
+                && name.contains('.')
+                && name.split('.').all(|l| {
+                    !l.is_empty()
+                        && l.len() <= 63
+                        && !l.starts_with('-')
+                        && !l.ends_with('-')
+                        && l.bytes().all(|b| {
+                            b.is_ascii_alphanumeric() || b == b'-' || (underscore && b == b'_')
+                        })
+                })
+        };
+        if !valid(domain.strip_prefix("*.").unwrap_or(&domain), false) || !valid(&owner, true) {
+            bail!("invalid DNS-01 domain or delegated owner: {entry}");
+        }
+        if let Some(previous) = owners.insert(host, owner.clone())
+            && previous != owner
+        {
+            bail!("conflicting DNS-01 delegations for {domain}");
+        }
+        if !domains.contains(&domain) {
+            domains.push(domain);
+        }
+    }
+    if domains.is_empty() {
+        bail!("at least one domain is required");
+    }
+    Ok((domains, owners))
 }
 
 fn check_cancel(cancel: &AtomicBool) -> Result<()> {
@@ -68,32 +114,7 @@ pub async fn issue(
     cancel: Arc<AtomicBool>,
     mut on_step: impl FnMut(IssueStep) + Send,
 ) -> Result<Cert> {
-    let domains: Vec<String> = req
-        .domains
-        .iter()
-        .map(|d| d.trim().trim_end_matches('.').to_ascii_lowercase())
-        .filter(|d| !d.is_empty())
-        .collect();
-    if domains.is_empty() {
-        bail!("domains is required");
-    }
-    for d in &domains {
-        let name = d.strip_prefix("*.").unwrap_or(d);
-        if name.len() > 253
-            || !name.contains('.')
-            || !name.split('.').all(|label| {
-                !label.is_empty()
-                    && label.len() <= 63
-                    && !label.starts_with('-')
-                    && !label.ends_with('-')
-                    && label
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-            })
-        {
-            bail!("invalid domain: {d}");
-        }
-    }
+    let (domains, owners) = challenge_domains(&req.domains)?;
 
     let provider = store
         .get_provider(&req.provider_id)?
@@ -140,12 +161,15 @@ pub async fn issue(
                 let value = challenge.key_authorization().dns_value();
                 let host = dns::challenge_name(&identifier);
                 tracing::info!(%host, "acme: upsert dns txt");
-                let record_id = dns.upsert_txt(&host, &value).await?;
-                tracing::info!(%host, %record_id, "acme: dns txt upserted");
+                let owner = owners
+                    .get(&host)
+                    .context("unexpected ACME authorization name")?;
+                let created_id = dns.upsert_txt(owner, &value).await?;
+                tracing::info!(%host, %owner, "acme: dns txt ready");
                 pending.push(PendingTxt {
                     host,
                     value,
-                    record_id,
+                    created_id,
                 });
             }
         }
@@ -199,19 +223,11 @@ pub async fn issue(
         .await
         .context("acme certificate")?;
 
-        use x509_parser::prelude::{FromDer, X509Certificate};
-        let (_, pem) = x509_parser::pem::parse_x509_pem(cert_chain_pem.as_bytes())
-            .map_err(|_| anyhow::anyhow!("invalid ACME certificate PEM"))?;
-        let (_, leaf) = X509Certificate::from_der(&pem.contents)
-            .map_err(|_| anyhow::anyhow!("invalid ACME leaf certificate"))?;
-        let not_after =
-            tzcraft::Ticks::from_unix_seconds(leaf.validity().not_after.timestamp(), 0)?
-                .to_rfc3339(tzcraft::FractionDigits::None);
         let cert = Cert {
             id: store::new_id("c"),
             domains,
             provider_id: req.provider_id,
-            not_after,
+            not_after: leaf_expiration(&cert_chain_pem)?,
         };
         store.add_cert(cert.clone(), &cert_chain_pem, &private_key_pem)?;
         tracing::info!(id = %cert.id, "acme: issue ok");
@@ -219,32 +235,33 @@ pub async fn issue(
     }
     .await;
 
-    let record_ids: Vec<String> = pending.iter().map(|p| p.record_id.clone()).collect();
-    if !record_ids.is_empty() {
+    if pending.iter().any(|p| p.created_id.is_some()) {
         on_step(IssueStep::Cleanup);
-        cleanup_dns(dns.as_ref(), &record_ids).await;
+        for id in pending.iter().filter_map(|p| p.created_id.as_deref()) {
+            if let Err(error) = dns.delete_txt(id).await {
+                tracing::warn!(%error, record = %id, "acme: cleanup txt failed");
+            }
+        }
     }
     result
 }
 
-async fn cleanup_dns(dns: &dyn DnsProvider, ids: &[String]) {
-    if ids.is_empty() {
-        return;
-    }
-    tracing::info!(count = ids.len(), "acme: cleanup dns txt");
-    for id in ids {
-        match dns.delete_txt(id).await {
-            Ok(()) => tracing::info!(record = %id, "acme: dns txt deleted"),
-            Err(e) => tracing::warn!(error = %e, record = %id, "acme: cleanup txt failed"),
-        }
-    }
+fn leaf_expiration(chain: &str) -> Result<String> {
+    use courierust::courierust_tls::x509::parse_certificate;
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+    let der =
+        CertificateDer::from_pem_slice(chain.as_bytes()).context("invalid ACME certificate PEM")?;
+    let leaf = parse_certificate(&der)
+        .map_err(|e| anyhow::anyhow!("invalid ACME leaf certificate: {e}"))?;
+    Ok(tzcraft::Ticks::from_unix_seconds(leaf.not_after, 0)?
+        .to_rfc3339(tzcraft::FractionDigits::None))
 }
 
 async fn load_or_create_account(store: &Store) -> Result<Account> {
     let path = store.acme_account_path();
     let directory_url = LetsEncrypt::Production.url().to_owned();
 
-    let builder = Account::builder().context("acme account builder")?;
+    let builder = Account::builder_with_http(Box::new(super::http::AcmeHttp));
 
     if path.exists() {
         let raw = std::fs::read_to_string(&path).context("read acme account")?;
@@ -275,4 +292,175 @@ async fn load_or_create_account(store: &Store) -> Result<Account> {
     store::write_private(&path, raw.as_bytes()).context("write acme account")?;
     tracing::info!("acme: production account created");
     Ok(account)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn dns_cleanup_preserves_existing_txt_on_cancel_and_propagation_timeout() {
+        use crate::cert::model::{Provider, Vendor};
+        use crate::http::{Method, Response, StatusCode, TEST_HTTP};
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        use courierust::courierust_http::header::HeaderMap;
+        use serde_json::json;
+        use std::sync::Mutex;
+        for cancel_at_wait in [true, false] {
+            let tmp = tempfile::tempdir().unwrap();
+            let store = Store::open(tmp.path().into()).unwrap();
+            let provider = store
+                .upsert_provider(
+                    Provider {
+                        id: String::new(),
+                        name: "test".into(),
+                        vendor: Vendor::Cloudflare,
+                        access_key_id: String::new(),
+                    },
+                    Some("fixture"),
+                )
+                .unwrap();
+            let key = rcgen::KeyPair::generate().unwrap();
+            let account = json!({"id":"https://ca.test/account", "key_pkcs8":URL_SAFE_NO_PAD.encode(key.serialize_der()),"urls":{"newNonce":"https://ca.test/nonce","newAccount":"https://ca.test/account","newOrder":"https://ca.test/order"}});
+            std::fs::write(store.acme_account_path(), account.to_string()).unwrap();
+            let token = "proof";
+            let thumb = load_or_create_account(&store)
+                .await
+                .unwrap()
+                .key_thumbprint()
+                .to_owned();
+            let proof = URL_SAFE_NO_PAD.encode(courierust::courierust_crypto::sha256::sha256(
+                format!("{token}.{thumb}").as_bytes(),
+            ));
+            let records = Arc::new(Mutex::new(BTreeMap::from([
+                ("existing".to_string(), proof.clone()),
+                ("other".to_string(), "keep".to_string()),
+            ])));
+            let state = records.clone();
+            let exchange = move |method: &Method, url: &str, body: &[u8]| -> Result<Response> {
+                let mut headers = HeaderMap::new();
+                headers.insert("replay-nonce".into(), "nonce".into());
+                let mut records = state.lock().unwrap();
+                let payload = if url == "https://ca.test/nonce" {
+                    serde_json::Value::Null
+                } else if url == "https://ca.test/order" {
+                    headers.insert("location".into(), "https://ca.test/order/1".into());
+                    json!({"status":"pending", "authorizations":["https://ca.test/auth/first","https://ca.test/auth/second"],"finalize":"https://ca.test/final"})
+                } else if let Some(name) = url.strip_prefix("https://ca.test/auth/") {
+                    json!({"identifier":{"type":"dns","value":format!("{name}.test")},"status":"pending","challenges":[{"type":"dns-01","url":"https://ca.test/challenge","status":"pending","token":if name == "first" { token } else { "different-proof" }}]})
+                } else if url.starts_with("https://api.cloudflare.com/client/v4/zones?") {
+                    json!({"success":true,"result":[{"id":"zone"}]})
+                } else if url.contains("/dns_records?") {
+                    assert!(url.ends_with("name=_validation.zone.test"));
+                    let rows: Vec<_> = records
+                        .iter()
+                        .map(|(id, value)| json!({"id":id,"content":value}))
+                        .collect();
+                    json!({"success":true,"result":rows})
+                } else if method == &Method::POST && url.ends_with("/dns_records") {
+                    let record: serde_json::Value = serde_json::from_slice(body)?;
+                    assert_eq!(record["name"], "_validation.zone.test");
+                    assert!(
+                        records
+                            .insert("created".into(), record["content"].as_str().unwrap().into())
+                            .is_none()
+                    );
+                    json!({"success":true,"result":{"id":"created"}})
+                } else if method == &Method::DELETE && url.ends_with("/dns_records/created") {
+                    assert!(records.remove("created").is_some());
+                    json!({"success":true,"result":{"id":"created"}})
+                } else if url.ends_with("name=_acme-challenge.first.test&type=TXT") {
+                    json!({"Status":0,"Answer":[]})
+                } else {
+                    panic!("unexpected fixture request {method:?} {url}");
+                };
+                Ok(Response {
+                    status: StatusCode::OK,
+                    headers,
+                    body: payload.to_string().into_bytes(),
+                })
+            };
+            let cancel = Arc::new(AtomicBool::new(false));
+            let req = IssueRequest {
+                provider_id: provider.id,
+                domains: vec![
+                    "first.test=_validation.zone.test".into(),
+                    "second.test=_validation.zone.test".into(),
+                ],
+            };
+            let mut cleaned = false;
+            let result = TEST_HTTP
+                .scope(
+                    Box::new(exchange),
+                    issue(&store, req, cancel.clone(), |step| {
+                        if step == IssueStep::DnsWait {
+                            assert_eq!(records.lock().unwrap().len(), 3);
+                            cancel.store(cancel_at_wait, Ordering::Relaxed);
+                        }
+                        cleaned |= step == IssueStep::Cleanup;
+                    }),
+                )
+                .await;
+            let error = format!("{:#}", result.unwrap_err());
+            assert!(
+                error.contains(if cancel_at_wait { "cancelled" } else { "150s" }),
+                "{error}"
+            );
+            assert!(cleaned);
+            assert_eq!(
+                *records.lock().unwrap(),
+                BTreeMap::from([("existing".into(), proof), ("other".into(), "keep".into())])
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn loads_legacy_account_with_saved_directory_endpoints() {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::open(tmp.path().into()).unwrap();
+        let key = rcgen::KeyPair::generate().unwrap();
+        let id = "https://acme.example.test/account/7";
+        let raw = serde_json::json!({
+            "id": id,
+            "key_pkcs8": URL_SAFE_NO_PAD.encode(key.serialize_der()),
+            "urls": {"newNonce": "https://acme.example.test/nonce", "newAccount": "https://acme.example.test/account", "newOrder": "https://acme.example.test/order"}
+        }).to_string();
+        std::fs::write(store.acme_account_path(), &raw).unwrap();
+        assert_eq!(load_or_create_account(&store).await.unwrap().id(), id);
+        assert_eq!(
+            std::fs::read_to_string(store.acme_account_path()).unwrap(),
+            raw
+        );
+    }
+
+    #[test]
+    fn expiration_comes_from_the_first_certificate_in_a_chain() {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let certificate = |year| {
+            let mut params = rcgen::CertificateParams::default();
+            params.not_after = rcgen::date_time_ymd(year, 6, 12);
+            params.self_signed(&key).unwrap().pem()
+        };
+        let chain = certificate(2031) + &certificate(2051);
+        assert_eq!(leaf_expiration(&chain).unwrap(), "2031-06-12T00:00:00Z");
+        assert_eq!(
+            leaf_expiration(&certificate(2051)).unwrap(),
+            "2051-06-12T00:00:00Z"
+        );
+        assert!(
+            leaf_expiration("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn delegated_txt_keeps_certificate_identity_and_rejects_conflicting_owners() {
+        let entry = "*.Example.org.=_proof.dns.example".to_owned();
+        let (ids, owners) = challenge_domains(std::slice::from_ref(&entry)).unwrap();
+        assert_eq!(ids, ["*.example.org"]);
+        assert_eq!(owners["_acme-challenge.example.org"], "_proof.dns.example");
+        assert!(challenge_domains(&[entry, "example.org".into()]).is_err());
+        assert!(challenge_domains(&["a.example=x.example&token=y".into()]).is_err());
+    }
 }

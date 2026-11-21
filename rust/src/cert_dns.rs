@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use std::time::Duration;
 
-async fn json<T: serde::de::DeserializeOwned>(
+async fn json<T: for<'de> nextjson::NsonDeserialize<'de>>(
     method: Method,
     url: &str,
     headers: &[(&'static str, &str)],
@@ -24,7 +24,8 @@ async fn json<T: serde::de::DeserializeOwned>(
 
 #[async_trait]
 pub trait DnsProvider: Send + Sync {
-    async fn upsert_txt(&self, host: &str, value: &str) -> Result<String>;
+    /// Returns a cleanup handle only when this call created a new record.
+    async fn upsert_txt(&self, host: &str, value: &str) -> Result<Option<String>>;
     async fn delete_txt(&self, record_id: &str) -> Result<()>;
 }
 
@@ -34,7 +35,7 @@ pub fn build_provider(provider: &Provider, secret: &str) -> Result<Box<dyn DnsPr
         bail!("dns secret is empty");
     }
     match provider.vendor {
-        Vendor::Cloudflare => Ok(Box::new(cloudflare::CloudflareDns::new(secret)?)),
+        Vendor::Cloudflare => Ok(Box::new(cloudflare::CloudflareDns::new(secret))),
         Vendor::Aliyun => {
             if provider.access_key_id.trim().is_empty() {
                 bail!("accessKeyId is required for aliyun");
@@ -42,7 +43,7 @@ pub fn build_provider(provider: &Provider, secret: &str) -> Result<Box<dyn DnsPr
             Ok(Box::new(aliyun::AliyunDns::new(
                 &provider.access_key_id,
                 secret,
-            )?))
+            )))
         }
         Vendor::Tencent => {
             if provider.access_key_id.trim().is_empty() {
@@ -51,7 +52,7 @@ pub fn build_provider(provider: &Provider, secret: &str) -> Result<Box<dyn DnsPr
             Ok(Box::new(tencent::TencentDns::new(
                 &provider.access_key_id,
                 secret,
-            )?))
+            )))
         }
     }
 }
@@ -62,6 +63,18 @@ pub fn challenge_name(domain: &str) -> String {
         .unwrap_or(domain)
         .trim_end_matches('.');
     format!("_acme-challenge.{domain}")
+}
+
+/// Walk suffixes from the TXT owner toward the root, keeping the relative record name alongside each zone.
+fn zone_candidates(host: &str) -> impl Iterator<Item = (&str, &str)> {
+    let host = host.trim_end_matches('.');
+    std::iter::successors(Some(host), |zone| {
+        zone.split_once('.').map(|(_, parent)| parent)
+    })
+    .map(move |zone| {
+        let prefix = host[..host.len() - zone.len()].trim_end_matches('.');
+        (zone, if prefix.is_empty() { "@" } else { prefix })
+    })
 }
 
 pub async fn wait_txt_propagated(
@@ -114,7 +127,7 @@ pub async fn wait_txt_propagated(
 }
 
 async fn fetch_txt_answers(url: &str) -> Result<Vec<String>> {
-    let resp: serde_json::Value = request(
+    let resp: nextjson::Value = request(
         Method::GET,
         url,
         &[("accept", "application/dns-json")],

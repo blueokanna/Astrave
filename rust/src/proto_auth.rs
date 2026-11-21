@@ -1,16 +1,13 @@
 //! Pre-shared-key authentication.
 //!
 //! The digest is `HMAC-SHA256(token, decimal(timestamp))`. Verification is
-//! constant time (`hmac` compares the tags) and the timestamp window is checked
+//! constant time (`ring` compares the tags) and the timestamp window is checked
 //! before the MAC so a clock-skewed peer does not consume hashing work.
 
 use alloc::string::String;
 use core::fmt;
 
-use hmac::{Hmac, KeyInit, Mac};
-use sha2::Sha256;
-
-type HmacSha256 = Hmac<Sha256>;
+use ring::hmac;
 
 /// Accepted clock skew, in seconds, between peers.
 pub const AUTH_SKEW_SECS: i64 = 180;
@@ -41,9 +38,8 @@ impl fmt::Display for AuthFailure {
 impl core::error::Error for AuthFailure {}
 
 pub fn compute_auth_digest(token: &str, timestamp: i64) -> String {
-    let mut mac = new_mac(token);
-    mac.update(decimal(timestamp, &mut [0; 20]));
-    crate::proto::hex::encode(&mac.finalize().into_bytes())
+    let key = hmac::Key::new(hmac::HMAC_SHA256, token.as_bytes());
+    crate::proto::hex::encode(hmac::sign(&key, decimal(timestamp, &mut [0; 20])).as_ref())
 }
 
 /// Verifies a digest produced by [`compute_auth_digest`].
@@ -70,14 +66,9 @@ pub fn verify_auth_digest(
     crate::proto::hex::decode_into(auth_digest.as_bytes(), &mut expected)
         .ok_or(AuthFailure::InvalidDigest)?;
 
-    let mut mac = new_mac(token);
-    mac.update(decimal(timestamp, &mut [0; 20]));
-    mac.verify_slice(&expected)
+    let key = hmac::Key::new(hmac::HMAC_SHA256, token.as_bytes());
+    hmac::verify(&key, decimal(timestamp, &mut [0; 20]), &expected)
         .map_err(|_| AuthFailure::InvalidDigest)
-}
-
-fn new_mac(token: &str) -> HmacSha256 {
-    HmacSha256::new_from_slice(token.as_bytes()).expect("HMAC accepts arbitrary key lengths")
 }
 
 fn decimal(value: i64, buf: &mut [u8; 20]) -> &[u8] {
@@ -107,7 +98,10 @@ mod tests {
     fn digest_roundtrip_and_skew() {
         let now = 1_700_000_000;
         let digest = compute_auth_digest("s3cret", now);
-        assert_eq!(digest.len(), 64);
+        assert_eq!(
+            digest,
+            "b82d76a98690627a418267faa0be5e8830d04d82cc88b5450d2c0f32173127c5"
+        );
         assert!(verify_auth_digest("s3cret", &digest, now, now).is_ok());
         assert_eq!(
             verify_auth_digest("wrong", &digest, now, now),

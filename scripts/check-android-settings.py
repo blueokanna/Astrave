@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
-def check(apk, output, serial):
+def check(apk, output, serial, extended=False):
     output.mkdir(parents=True, exist_ok=True)
     prefix = ["adb", "-s", serial] if serial else ["adb", "-e"]
     package = "dev.astrave.astrave"
@@ -54,8 +54,12 @@ def check(apk, output, serial):
         locate(option, True)
         locate(setting)
 
-    res = adb("install", "--no-streaming", "-r", apk, timeout=180)
-    assert b"Success" in res, res
+    install = subprocess.run(
+        [*prefix, "install", "--no-streaming", "-r", str(apk)],
+        capture_output=True, text=True, errors="replace", timeout=240,
+    )
+    if install.returncode or "Success" not in install.stdout:
+        raise RuntimeError(f"adb install ({install.returncode}): {install.stdout} {install.stderr}")
     adb("shell", "input", "keyevent", "224")
     adb("shell", "wm", "dismiss-keyguard")
     adb("shell", "am", "start", "-n", activity)
@@ -71,6 +75,17 @@ def check(apk, output, serial):
         screen(filename)
     choose("Theme", "Dark")
     choose("Color palette", "Jade")
+    if extended:
+        choose("Theme", "AMOLED Monet")
+        locate("AMOLED Monet")
+        screen("settings-monet")
+        locate("Language", True)
+        locate("العربية", True)
+        locate("AMOLED Monet")
+        screen("settings-ar")
+        locate("اللغة", True)
+        locate("English", True)
+        choose("Theme", "AMOLED")
     locate("Language", True)
     locate("简体中文", True)
     locate("青玉")
@@ -83,7 +98,7 @@ def check(apk, output, serial):
     adb("shell", "am", "force-stop", package)
     adb("shell", "am", "start", "-n", activity)
     locate("设置", True)
-    for value in ["青玉", "高斯模糊", "深色", "简体中文"]:
+    for value in ["青玉", "高斯模糊", "AMOLED" if extended else "深色", "简体中文"]:
         locate(value)
     print(
         "Verified all glass selections, certificate navigation and persisted language, palette and theme."
@@ -95,5 +110,6 @@ if __name__ == "__main__":
     parser.add_argument("apk", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--serial")
+    parser.add_argument("--extended", action="store_true", help="Exercise AMOLED and Arabic in builds with multilingual settings")
     args = parser.parse_args()
-    check(args.apk, args.output, args.serial)
+    check(args.apk, args.output, args.serial, args.extended)
