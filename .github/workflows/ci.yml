@@ -32,6 +32,7 @@ jobs:
         run: |
           JAVA_HOME="$JAVA_HOME_21_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             'platform-tools' 'platforms;android-36' 'ndk;28.2.13676358'
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.47.9'
@@ -81,24 +82,33 @@ jobs:
           if-no-files-found: error
 
       - name: Prepare hardware-accelerated Android emulator
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         run: |
           sudo chmod a+rw /dev/kvm
-          JAVA_HOME="$JAVA_HOME_21_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'emulator' 'system-images;android-33;google_apis;x86_64'
-          echo no | JAVA_HOME="$JAVA_HOME_21_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n settings -k 'system-images;android-33;google_apis;x86_64' -d pixel_2
+          image='system-images;android-33;default;x86_64'
+          JAVA_HOME="$JAVA_HOME_21_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" emulator "$image"
+          echo no | JAVA_HOME="$JAVA_HOME_21_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n settings -k "$image" -d pixel_2
       - name: Exercise settings and capture device screenshots
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         timeout-minutes: 15
         run: |
-          "$ANDROID_HOME/emulator/emulator" -avd settings -no-window -no-snapshot -no-audio -no-boot-anim -gpu swiftshader_indirect > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          adb start-server
+          "$ANDROID_HOME/emulator/emulator" -avd settings -no-window -no-snapshot -no-audio -no-boot-anim -gpu swiftshader -memory 2048 > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          emulator_pid=$!
           trap 'adb -e emu kill || true' EXIT
-          adb -e wait-for-device
-          until [[ "$(adb -e shell getprop sys.boot_completed | tr -d '\r')" == 1 ]]; do sleep 2; done
+          until [[ "$(adb -e shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == 1 ]]; do
+            if ! kill -0 "$emulator_pid" 2>/dev/null || (( SECONDS >= 300 )); then
+              tail -100 "$RUNNER_TEMP/emulator.log"
+              exit 1
+            fi
+            sleep 2
+          done
           adb -e shell wm size 540x1160
           adb -e shell wm density 240
+          adb -e shell settings put system screen_off_timeout 1800000
           python3 scripts/check-android-settings.py app/build/app/outputs/flutter-apk/app-x86_64-release.apk "$RUNNER_TEMP/screens"
       - uses: actions/upload-artifact@v4
-        if: always() && github.event_name == 'workflow_dispatch'
+        if: always() && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
         with:
           name: android-settings-screens
           path: ${{ runner.temp }}/screens
