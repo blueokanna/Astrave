@@ -110,3 +110,9 @@ Configure the repository secrets `ANDROID_KEYSTORE_BASE64` (base64-encoded relea
 Apache License 2.0. [License text](LICENSE)
 
 The desktop app uses Google Sans and HarmonyOS Sans. Both font licenses are included in the app and available under **About Astrave → View licenses**. [Google Sans license](app/assets/fonts/GoogleSans-OFL.txt) · [HarmonyOS Sans license](app/assets/fonts/HarmonyOS-Sans-License.txt)
+
+## Contributions and Support
+
+Thank you to [lxien](https://github.com/lxien) for their foundational contributions to this project prototype. 
+
+If you’d like to support my development work, please visit [Buy Me a Coffee](https://www.buymeacoffee.com/blueokanna) or [CryptoCurrency](https://github.com/blueokanna/ArcadiaPlus/blob/main/.github/tips.md)

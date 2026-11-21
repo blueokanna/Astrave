@@ -110,3 +110,7 @@ Android 签名使用仓库密钥 `ANDROID_KEYSTORE_BASE64`（以 Base64 编码�
 Apache License 2.0。[许可证全文](LICENSE)
 
 桌面端使用 Google Sans 和 HarmonyOS Sans 字体。在「关于 Astrave」中可阅览随应用分发的字体许可证。[Google Sans 许可证](app/assets/fonts/GoogleSans-OFL.txt) · [HarmonyOS Sans 许可证](app/assets/fonts/HarmonyOS-Sans-License.txt)
+
+## 贡献与支持
+
+感谢 [lxien](https://github.com/lxien) 对于这个项目原型的基础贡献，如果您愿意支持我的开发工作，请访问 [Buy Me a Coffee](https://www.buymeacoffee.com/blueokanna) 或 [CryptoCurrency](https://github.com/blueokanna/ArcadiaPlus/blob/main/.github/tips.md)
