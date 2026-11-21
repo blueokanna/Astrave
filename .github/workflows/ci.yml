@@ -37,6 +37,19 @@ jobs:
         with:
           flutter-version: '3.47.9'
           cache: true
+      - name: Prepare hardware-accelerated Android emulator
+        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+        run: |
+          sudo chmod a+rw /dev/kvm
+          export ANDROID_USER_HOME="$RUNNER_TEMP/android-settings"
+          export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          image='system-images;android-33;default;x86_64'
+          JAVA_HOME="$JAVA_HOME_21_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" emulator "$image"
+          echo no | JAVA_HOME="$JAVA_HOME_21_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n settings -k "$image" -d pixel_2 -p "$ANDROID_AVD_HOME/settings.avd"
+          test -s "$ANDROID_AVD_HOME/settings.avd/config.ini"
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -Fx settings
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
       - name: Prepare Android release signing
         if: inputs.release_version != ''
         env:
@@ -81,13 +94,6 @@ jobs:
           path: dist/android/*.apk
           if-no-files-found: error
 
-      - name: Prepare hardware-accelerated Android emulator
-        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
-        run: |
-          sudo chmod a+rw /dev/kvm
-          image='system-images;android-33;default;x86_64'
-          JAVA_HOME="$JAVA_HOME_21_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" emulator "$image"
-          echo no | JAVA_HOME="$JAVA_HOME_21_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n settings -k "$image" -d pixel_2
       - name: Exercise settings and capture device screenshots
         if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         timeout-minutes: 15
