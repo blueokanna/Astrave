@@ -10,11 +10,15 @@ abstract final class Space {
   static const section = 32.0;
 }
 
-ThemeData desktopTheme(Brightness brightness, ColorScheme? dynamicScheme) {
+ThemeData desktopTheme(
+  Brightness brightness,
+  ColorScheme? dynamicScheme, {
+  Color? seed,
+}) {
   final scheme =
-      dynamicScheme ??
+      (seed == null ? dynamicScheme : null) ??
       ColorScheme.fromSeed(
-        seedColor: const Color(0xff6651a8),
+        seedColor: seed ?? const Color(0xff6651a8),
         brightness: brightness,
         dynamicSchemeVariant: DynamicSchemeVariant.expressive,
       );

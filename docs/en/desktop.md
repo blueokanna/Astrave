@@ -8,7 +8,9 @@ title: Android and Desktop Clients
 
 Open a TOML file under Profile, validate and save it, then connect from Overview. The connection card shows the client state and the transport settings from the profile. If you save changes during a session, select the pending-reload message to open Profile and choose **Reload saved profile**.
 
-Tunnel rows show the path incoming traffic follows from the public endpoint to the local service. Copy the assigned endpoint from the row menu once the server confirms it. A dynamically assigned port reads **Automatic** until the endpoint arrives. Activity shows the most recent 500 log entries. Under Certificates, configure a DNS provider before requesting a certificate.
+Tunnel rows show the path incoming traffic follows from the public endpoint to the local service. Copy the assigned endpoint from the row menu once the server confirms it. A dynamically assigned port reads **Automatic** until the endpoint arrives. Activity shows the most recent 500 log entries. Open **Settings → Certificates** to configure a DNS provider and request a certificate.
+
+Settings also controls language, light or dark appearance, dynamic color and seed palettes. On Android the floating navigation capsule can use a solid surface, Gaussian blur, tinted Aero Glass or Liquid Glass styling. The glass styles sample the content beneath the capsule. Liquid Glass adds edge refraction on Impeller and uses a translucent gradient over blur on other renderers. High contrast selects the solid surface. Your choices persist across restarts.
 
 ![Astrave Desktop](/img/desktop.png)
 

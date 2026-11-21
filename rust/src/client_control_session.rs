@@ -5,11 +5,12 @@ use crate::core::VERSION;
 use crate::core::auth;
 use crate::core::config::{ClientConfig, TunnelConfig};
 use crate::core::msg::{self, CloseTunnel, Codec, Login, Message, NewDataConn, NewTunnel, Ping};
+use crate::core::net::{HANDSHAKE_TIMEOUT, Heartbeat};
 use crate::core::transport::DynStream;
 use anyhow::{Result, anyhow};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::atomic::{AtomicI64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncWriteExt, ReadHalf, WriteHalf};
@@ -58,7 +59,7 @@ pub struct Control {
     data_tasks: Mutex<JoinSet<()>>,
     on_tunnel_remote: OnTunnelRemote,
     on_tunnel_removed: OnTunnelRemoved,
-    last_pong_unix: AtomicI64,
+    last_pong: Heartbeat,
     codec: AtomicU8,
     register_watch: StdMutex<RegisterWatch>,
 }
@@ -93,52 +94,62 @@ impl Control {
     ) -> Result<ActiveSession> {
         let cfg_snapshot = cfg.read().await.clone();
         let session_cancel = parent_cancel.child_token();
-        let connector = build_connector(&cfg_snapshot).await?;
-        let mut stream = connector.open().await?;
-        tracing::info!(
-            endpoint = %cfg_snapshot.server_endpoint(),
-            protocol = %cfg_snapshot.transport.protocol,
-            tcp_mux = cfg_snapshot.uses_yamux(),
-            "control stream opened"
-        );
+        let (connector, stream, resp) = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
+            let connector = build_connector(&cfg_snapshot).await?;
+            let mut stream = connector.open().await?;
+            tracing::info!(
+                endpoint = %cfg_snapshot.server_endpoint(),
+                protocol = %cfg_snapshot.transport.protocol,
+                tcp_mux = cfg_snapshot.uses_yamux(),
+                "control stream opened"
+            );
 
-        let timestamp = now_secs();
-        let auth_digest = auth::compute_auth_digest(&cfg_snapshot.auth.token, timestamp);
-        let login = Login {
-            version: VERSION.into(),
-            hostname: hostname(),
-            os: std::env::consts::OS.into(),
-            arch: std::env::consts::ARCH.into(),
-            user: cfg_snapshot.user.clone(),
-            agent_id: cfg_snapshot.agent_id.clone(),
-            auth_digest,
-            timestamp,
-            session_id: previous_session_id,
-            pool_count: cfg_snapshot.transport.pool_count,
-        };
-        tracing::info!(
-            hostname = %login.hostname,
-            os = %login.os,
-            arch = %login.arch,
-            user = %login.user,
-            agent_id = %login.agent_id,
-            "login identity"
-        );
+            let timestamp = now_secs();
+            let auth_digest = auth::compute_auth_digest(&cfg_snapshot.auth.token, timestamp);
+            let login = Login {
+                version: VERSION.into(),
+                hostname: hostname(),
+                os: std::env::consts::OS.into(),
+                arch: std::env::consts::ARCH.into(),
+                user: cfg_snapshot.user.clone(),
+                agent_id: cfg_snapshot.agent_id.clone(),
+                auth_digest,
+                timestamp,
+                session_id: previous_session_id,
+                pool_count: cfg_snapshot.transport.pool_count,
+            };
+            tracing::info!(
+                hostname = %login.hostname,
+                os = %login.os,
+                arch = %login.arch,
+                user = %login.user,
+                agent_id = %login.agent_id,
+                "login identity"
+            );
 
-        msg::write_msg(&mut stream, &Message::Login(login), Codec::Json).await?;
-        let resp = match msg::read_msg(&mut stream).await?.0 {
-            Message::LoginResp(r) => r,
-            other => {
-                return Err(anyhow!(
-                    "expected LoginResp, got type {}",
-                    other.type_byte()
-                ));
+            msg::write_msg(&mut stream, &Message::Login(login), Codec::Json).await?;
+            let resp = match msg::read_msg(&mut stream).await?.0 {
+                Message::LoginResp(r) => r,
+                other => {
+                    return Err(anyhow!(
+                        "expected LoginResp, got type {}",
+                        other.type_byte()
+                    ));
+                }
+            };
+
+            if !resp.error.is_empty() {
+                return Err(LoginRejected { reason: resp.error }.into());
             }
-        };
-
-        if !resp.error.is_empty() {
-            return Err(LoginRejected { reason: resp.error }.into());
-        }
+            Ok::<_, anyhow::Error>((connector, stream, resp))
+        })
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "control handshake timed out after {}s",
+                HANDSHAKE_TIMEOUT.as_secs()
+            )
+        })??;
 
         let codec = if resp.codec == Codec::Binary.as_str() {
             Codec::Binary
@@ -163,7 +174,7 @@ impl Control {
             data_tasks: Mutex::new(JoinSet::new()),
             on_tunnel_remote,
             on_tunnel_removed,
-            last_pong_unix: AtomicI64::new(now_secs()),
+            last_pong: Heartbeat::default(),
             codec: AtomicU8::new(if codec.is_binary() { 1 } else { 0 }),
             register_watch: StdMutex::new(RegisterWatch {
                 pending: HashSet::new(),
@@ -470,7 +481,7 @@ impl Control {
                     }
                 }
                 Message::Pong(_) => {
-                    self.last_pong_unix.store(now_secs(), Ordering::Relaxed);
+                    self.last_pong.received();
                     tracing::trace!("pong");
                 }
                 other => {
@@ -521,9 +532,7 @@ impl Control {
                 break;
             }
             sleep(Duration::from_secs(1)).await;
-            let last = self.last_pong_unix.load(Ordering::Relaxed);
-            let now = now_secs();
-            if last > 0 && now.saturating_sub(last) > timeout {
+            if self.last_pong.age().as_secs() > timeout as u64 {
                 tracing::warn!(timeout_secs = timeout, "heartbeat timeout");
                 self.cancel.cancel();
                 break;

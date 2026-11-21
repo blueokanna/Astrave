@@ -81,7 +81,12 @@ class Overview extends StatelessWidget {
               ),
             ),
             SliverPadding(
-              padding: EdgeInsets.fromLTRB(side, 0, side, inset),
+              padding: EdgeInsets.fromLTRB(
+                side,
+                0,
+                side,
+                inset + MediaQuery.paddingOf(context).bottom,
+              ),
               sliver: tunnels.isEmpty
                   ? SliverToBoxAdapter(
                       child: Card.outlined(
@@ -146,13 +151,11 @@ class _ConnectionCard extends StatelessWidget {
       'Stopping' => (t('Disconnecting', '正在断开'), Icons.link_off_rounded),
       _ => (t('Disconnected', '未连接'), Icons.link_off_rounded),
     };
-    const ink = Color(0xffedf5fc),
-        muted = Color(0xffbdcbdc),
-        mint = Color(0xff9ce9d3);
+    final ink = colors.onPrimaryContainer, muted = colors.onSurfaceVariant;
     final accent = running
-        ? mint
+        ? colors.primary
         : session.active
-        ? const Color(0xffffd49b)
+        ? colors.tertiary
         : muted;
     final metrics = [
       (
@@ -176,7 +179,7 @@ class _ConnectionCard extends StatelessWidget {
       ),
     ];
     return Card.filled(
-      color: const Color(0xff182631),
+      color: colors.primaryContainer,
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -236,9 +239,9 @@ class _ConnectionCard extends StatelessWidget {
                           540 * MediaQuery.textScalerOf(context).scale(12) / 12)
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 18),
-                          decoration: const BoxDecoration(
+                          decoration: BoxDecoration(
                             border: Border(
-                              left: BorderSide(color: Color(0xff47616b)),
+                              left: BorderSide(color: colors.outlineVariant),
                             ),
                           ),
                           child: Column(
@@ -269,10 +272,6 @@ class _ConnectionCard extends StatelessWidget {
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: mint,
-                        foregroundColor: const Color(0xff10352d),
-                      ),
                       onPressed: session.busy ? null : connect,
                       icon: Icon(
                         session.active
@@ -288,7 +287,7 @@ class _ConnectionCard extends StatelessWidget {
                     if (session.active && session.reloadPending)
                       TextButton(
                         style: TextButton.styleFrom(
-                          foregroundColor: const Color(0xffffd49b),
+                          foregroundColor: colors.onPrimaryContainer,
                         ),
                         onPressed: edit,
                         child: Text(

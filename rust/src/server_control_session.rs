@@ -12,10 +12,11 @@ use crate::tunnel::{
 use anyhow::Result;
 use astrave_desktop::core::config::ServerConfig;
 use astrave_desktop::core::msg::{self, Codec, KickOut, Message, Ping, Pong};
+use astrave_desktop::core::net::Heartbeat;
 use astrave_desktop::core::transport::DynStream;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::io::{ReadHalf, WriteHalf};
 use tokio::sync::{Mutex, Notify, mpsc, watch};
@@ -59,7 +60,7 @@ pub struct Control {
     http_gw: Option<Arc<HttpGw>>,
     https_gw: Option<Arc<HttpsGw>>,
     pub metrics: Arc<MemMetrics>,
-    last_ping_unix: AtomicI64,
+    last_ping: Heartbeat,
     /// Codec of the last frame received; replies mirror it.
     codec: AtomicU8,
 }
@@ -119,12 +120,7 @@ impl Control {
             http_gw,
             https_gw,
             metrics,
-            last_ping_unix: AtomicI64::new(
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0),
-            ),
+            last_ping: Heartbeat::default(),
             codec: AtomicU8::new(0),
         }
     }
@@ -264,12 +260,7 @@ impl Control {
                             break;
                         }
                         sleep(Duration::from_secs(1)).await;
-                        let last = this.last_ping_unix.load(Ordering::Relaxed);
-                        let now = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .map(|d| d.as_secs() as i64)
-                            .unwrap_or(0);
-                        if last > 0 && now.saturating_sub(last) > timeout {
+                        if this.last_ping.age().as_secs() > timeout as u64 {
                             tracing::warn!(
                                 session_id = %this.session_id,
                                 generation = this.generation,
@@ -437,13 +428,7 @@ impl Control {
     }
 
     async fn handle_ping(&self, _p: Ping) -> Result<()> {
-        self.last_ping_unix.store(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
-            Ordering::Relaxed,
-        );
+        self.last_ping.received();
         let mut writer = self.writer.lock().await;
         msg::write_msg(&mut *writer, &Message::Pong(Pong::default()), self.codec()).await?;
         Ok(())

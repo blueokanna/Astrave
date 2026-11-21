@@ -15,8 +15,10 @@ import 'android_tls.dart';
 import 'certificates.dart';
 import 'design.dart';
 import 'desktop_tray.dart';
+import 'navigation_capsule.dart';
 import 'overview.dart';
 import 'session.dart';
+import 'settings.dart';
 import 'src/rust/api.dart' as rust;
 import 'src/rust/frb_generated.dart';
 
@@ -41,11 +43,16 @@ class AstraveApp extends StatefulWidget {
   State<AstraveApp> createState() => _AstraveAppState();
 }
 
-class _AstraveAppState extends State<AstraveApp> {
+class _AstraveAppState extends State<AstraveApp> with WidgetsBindingObserver {
   late final Future<String> _defaultPath = _initialize();
-  late bool chinese =
-      WidgetsBinding.instance.platformDispatcher.locale.languageCode == 'zh';
-  ThemeMode mode = ThemeMode.system;
+  Appearance appearance = const Appearance();
+  bool get chinese =>
+      appearance.language == AppLanguage.zh ||
+      (appearance.language == AppLanguage.system &&
+          WidgetsBinding.instance.platformDispatcher.locale.languageCode ==
+              'zh');
+  Future<void> saving = Future.value();
+  final messenger = GlobalKey<ScaffoldMessengerState>();
   final prefs = SharedPreferencesAsync();
   DesktopTray? tray;
 
@@ -54,9 +61,7 @@ class _AstraveAppState extends State<AstraveApp> {
     if (Platform.isAndroid) initializeAndroidTls();
     final dir = await getApplicationSupportDirectory();
     final path = await rust.initialize(directory: dir.path);
-    chinese = await prefs.getBool('chinese') ?? chinese;
-    final dark = await prefs.getBool('dark');
-    if (dark != null) mode = dark ? ThemeMode.dark : ThemeMode.light;
+    appearance = await Appearance.load(prefs);
     if (mounted) {
       if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
         tray = DesktopTray()..install(chinese);
@@ -67,7 +72,36 @@ class _AstraveAppState extends State<AstraveApp> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeLocales(List<Locale>? locales) {
+    if (appearance.language == AppLanguage.system) {
+      tray?.localize(chinese);
+      setState(() {});
+    }
+  }
+
+  void updateAppearance(Appearance next) {
+    setState(() => appearance = next);
+    tray?.localize(chinese);
+    saving = saving.then((_) => next.save(prefs)).catchError((Object e) {
+      messenger.currentState?.showSnackBar(
+        SnackBar(
+          content: Text(
+            chinese ? '保存偏好设置失败：$e' : 'Could not save preferences: $e',
+          ),
+        ),
+      );
+    });
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     tray?.dispose();
     super.dispose();
   }
@@ -77,9 +111,21 @@ class _AstraveAppState extends State<AstraveApp> {
     builder: (light, dark) => MaterialApp(
       title: 'Astrave',
       debugShowCheckedModeBanner: false,
-      theme: desktopTheme(Brightness.light, light),
-      darkTheme: desktopTheme(Brightness.dark, dark),
-      themeMode: mode,
+      scaffoldMessengerKey: messenger,
+      locale: Locale(chinese ? 'zh' : 'en'),
+      supportedLocales: const [Locale('en'), Locale('zh')],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
+      theme: desktopTheme(
+        Brightness.light,
+        light,
+        seed: appearance.palette.seed,
+      ),
+      darkTheme: desktopTheme(
+        Brightness.dark,
+        dark,
+        seed: appearance.palette.seed,
+      ),
+      themeMode: appearance.theme,
       themeAnimationStyle: MediaQuery.disableAnimationsOf(context)
           ? AnimationStyle.noAnimation
           : const AnimationStyle(
@@ -103,16 +149,8 @@ class _AstraveAppState extends State<AstraveApp> {
             initialPath: widget.profilePath ?? state.requireData,
             text: (en, zh) => chinese ? zh : en,
             hide: tray?.visible == true ? tray!.hide : null,
-            language: () async {
-              setState(() => chinese = !chinese);
-              tray?.localize(chinese);
-              await prefs.setBool('chinese', chinese);
-            },
-            theme: () async {
-              final dark = Theme.of(context).brightness == Brightness.light;
-              setState(() => mode = dark ? ThemeMode.dark : ThemeMode.light);
-              await prefs.setBool('dark', dark);
-            },
+            appearance: appearance,
+            updateAppearance: updateAppearance,
           );
         },
       ),
@@ -125,13 +163,14 @@ class Workspace extends StatefulWidget {
     super.key,
     required this.initialPath,
     required this.text,
-    required this.language,
-    required this.theme,
+    required this.appearance,
+    required this.updateAppearance,
     this.hide,
   });
   final String initialPath;
   final LocalText text;
-  final VoidCallback language, theme;
+  final Appearance appearance;
+  final ValueChanged<Appearance> updateAppearance;
   final VoidCallback? hide;
   @override
   State<Workspace> createState() => _WorkspaceState();
@@ -148,13 +187,13 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
     t('Overview', '概览'),
     t('Profile', '配置'),
     t('Activity', '活动日志'),
-    t('Certificates', '证书'),
+    t('Settings', '设置'),
   ];
   static const icons = [
     Icons.space_dashboard_outlined,
     Icons.tune_rounded,
     Icons.subject_rounded,
-    Icons.verified_user_outlined,
+    Icons.settings_outlined,
   ];
 
   @override
@@ -429,18 +468,8 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final s = session;
-    final wide = MediaQuery.sizeOf(context).width >= 800;
+    final wide = !Platform.isAndroid && MediaQuery.sizeOf(context).width >= 800;
     final actions = [
-      IconButton(
-        tooltip: t('Change language', '切换语言'),
-        onPressed: widget.language,
-        icon: const Icon(Icons.translate),
-      ),
-      IconButton(
-        tooltip: t('Change theme', '切换主题'),
-        onPressed: widget.theme,
-        icon: const Icon(Icons.contrast),
-      ),
       ActionsMenu(
         tooltip: t('More', '更多'),
         children: [
@@ -508,10 +537,40 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       ),
       1 => ListenableBuilder(listenable: s, builder: (_, _) => profilePanel(s)),
       2 => ActivityPanel(logs: s.logs, filter: logFilter, text: t),
-      _ => Certificates(text: t, profilePath: s.profile.path),
+      _ => SettingsPanel(
+        value: widget.appearance,
+        text: t,
+        onChanged: widget.updateAppearance,
+        certificates: () {
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (ctx) => Scaffold(
+                appBar: AppBar(title: Text(t('Certificates', '证书'))),
+                body: SafeArea(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(Space.medium),
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 880),
+                        child: Certificates(
+                          text: t,
+                          profilePath: s.profile.path,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
     };
     return Scaffold(
+      extendBody: !wide,
       body: SafeArea(
+        bottom: wide,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -556,9 +615,15 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                     ? panels
                     : SingleChildScrollView(
                         key: PageStorageKey(page),
-                        padding: EdgeInsets.all(
-                          wide ? Space.section : Space.medium,
-                        ),
+                        padding:
+                            EdgeInsets.all(wide ? Space.section : Space.medium)
+                                .copyWith(
+                                  bottom: wide
+                                      ? Space.section
+                                      : 100 +
+                                            MediaQuery.viewPaddingOf(context)
+                                                .bottom,
+                                ),
                         child: Align(
                           alignment: Alignment.topCenter,
                           child: ConstrainedBox(
@@ -581,9 +646,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       ),
       bottomNavigationBar: wide
           ? null
-          : NavigationBar(
-              selectedIndex: page,
-              onDestinationSelected: (i) => setState(() => page = i),
+          : NavigationCapsule(
+              glass: widget.appearance.glass,
+              selected: page,
+              select: (i) => setState(() => page = i),
               destinations: [
                 for (var i = 0; i < titles.length; i++)
                   NavigationDestination(icon: Icon(icons[i]), label: titles[i]),

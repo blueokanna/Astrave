@@ -1,0 +1,45 @@
+name: Compare reverse tunnels
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  loopback:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.95.0'
+      - uses: Swatinem/rust-cache@v2
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: '3.13.7'
+      - run: cargo build --release --locked --bin astrave --bin astrave-server
+      - name: Verify upstream release archives
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir peers
+          cd peers
+          frp=frp_0.72.0_linux_amd64
+          curl --fail --location --retry 3 -O "https://github.com/fatedier/frp/releases/download/v0.72.0/$frp.tar.gz"
+          for program in orbien orbien-server; do
+            curl --fail --location --retry 3 -O "https://github.com/orbien-org/orbien/releases/download/v3.10.0/${program}_3.10.0_linux_amd64_gnu.tar.gz"
+          done
+          sha256sum --check <<'DIGESTS'
+          daf719b32ca2778770bb92955e231a07414d754378b9af328aa2642862479804  frp_0.72.0_linux_amd64.tar.gz
+          3c3403a2ddc1341fb70b83699337e2694601828f3605a995846ca93f0e83ed88  orbien_3.10.0_linux_amd64_gnu.tar.gz
+          d91ae558c3000bd18eb1c15c85ddc1772e5fb4cff2cc123cada19cb0f09a1ad5  orbien-server_3.10.0_linux_amd64_gnu.tar.gz
+          DIGESTS
+          tar -xf "$frp.tar.gz" --strip-components=1 "$frp/frpc" "$frp/frps"
+          for program in orbien orbien-server; do
+            tar -xf "${program}_3.10.0_linux_amd64_gnu.tar.gz"
+          done
+      - name: Verify echoes and restart recovery
+        run: dart scripts/compare-tunnels.dart astrave=target/release "orbien=$RUNNER_TEMP/peers" "frp=$RUNNER_TEMP/peers" | tee "$RUNNER_TEMP/comparison.jsonl"
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-loopback-samples
+          path: ${{ runner.temp }}/comparison.jsonl
+          if-no-files-found: error

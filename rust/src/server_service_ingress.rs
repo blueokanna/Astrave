@@ -1,14 +1,12 @@
 use super::Service;
 use anyhow::{Result, anyhow};
 use astrave_desktop::core::msg::{self, Message};
-use astrave_desktop::core::net::tune_tcp_stream;
+use astrave_desktop::core::net::{HANDSHAKE_TIMEOUT, tune_tcp_stream};
 use astrave_desktop::core::transport::{self, DynStream, boxed_stream};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{Duration, timeout};
-
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+use tokio::time::timeout;
 
 impl Service {
     pub(super) async fn run_tcp(self: Arc<Self>, listener: TcpListener) -> Result<()> {

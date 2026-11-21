@@ -242,9 +242,18 @@ def check(bin_dir, work, proto, origins, tls):
             f'auth.token="{token}"\ntransport.tcpMux=true\n[transport.tls]\nforce=true\ncertFile="server.pem"\n'
             f'keyFile="server.key"\ntrustedCaFile="ca.pem"\n[dashboard]\naddr="{HOST}"\nport={dashboard}\nuser="test"\npassword="{token}"\n'
         )
-        stack.enter_context(
-            running(bin_dir, work, "astrave-server", server, "gateway", env)
-        )
+        if proto == "tcp":
+            # Keep the accepted connection open after replacing the listening
+            # socket. Recovery must come from the client's handshake deadline.
+            stalled = stack.enter_context(socket.socket())
+            stalled.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            stalled.bind((HOST, control))
+            stalled.listen(1)
+            stalled.settimeout(20)
+        else:
+            stack.enter_context(
+                running(bin_dir, work, "astrave-server", server, "gateway", env)
+            )
         cfg = (
             f'server="{HOST}:{loss.port if loss else control}"\nauth.token="{token}"\ntransport.protocol="{proto}"\n'
             'transport.tcpMux=true\n[transport.tls]\nenable=true\nserverName="localhost"\n'
@@ -275,6 +284,13 @@ def check(bin_dir, work, proto, origins, tls):
         client, path, log = stack.enter_context(
             running(bin_dir, work, "astrave", cfg, "agent", env)
         )
+        if proto == "tcp":
+            held, _ = stalled.accept()
+            stack.enter_context(held)
+            stalled.close()
+            gateway_process, _, _ = stack.enter_context(
+                running(bin_dir, work, "astrave-server", server, "gateway", env)
+            )
         with ready(mapped, client, log) as sock:
             sock.settimeout(30)
             sock.sendall(PAYLOAD)
@@ -352,6 +368,19 @@ def check(bin_dir, work, proto, origins, tls):
                 raise RuntimeError("HTTP route reload failed")
             time.sleep(0.1)
         assert get_http(http, "site.test", "/api")[0] == 404
+        gateway_process.kill()
+        gateway_process.wait(5)
+        stack.enter_context(
+            running(bin_dir, work, "astrave-server", server, "restart", env)
+        )
+        with ready(mapped, client, log) as sock:
+            sock.settimeout(10)
+            sock.sendall(PAYLOAD)
+            assert receive(sock, len(PAYLOAD)) == PAYLOAD
+        print(
+            "Recovered after a stalled handshake and gateway restart with the same client process",
+            flush=True,
+        )
         print(
             "TCP multiplexing, token and mTLS, UDP, HTTP, both HTTPS modes, SOCKS5 CONNECT, dashboard authentication and tunnel reload passed",
             flush=True,

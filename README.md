@@ -96,6 +96,8 @@ The performance report includes the Windows measurements, time and space complex
 
 ## Release versions
 
+For deployment differences and measured gateway restart times, see the [comparison with frp, Orbien and Tailscale](docs/en/comparison.md).
+
 For `version: 1.0.0+1` in `app/pubspec.yaml`, set the Cargo package version in `rust/Cargo.toml` to `1.0.0` and tag the release commit `v1.0.0`. Flutter uses `1` as the build number. A tag push starts Rust and Flutter checks, builds the CLI, desktop packages and three Android APKs, and publishes the GitHub Release after the builds and container images succeed. To rerun manually, select the same tag in the Release workflow.
 
 Configure the repository secrets `ANDROID_KEYSTORE_BASE64` (base64-encoded release keystore), `ANDROID_STORE_PASSWORD`, `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` for APK signing. Use the same signing key for updates to an installed app.

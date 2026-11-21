@@ -96,6 +96,8 @@ Windows 同负载的内存、吞吐、管理查询延迟，以及各路径的时
 
 ## 发布版本
 
+公网端口映射、私网组网的差异和网关重启实测见 [frp、Orbien 与 Tailscale 对比](docs/zh/comparison.md)。
+
 例如，`app/pubspec.yaml` 使用 `version: 1.0.0+1` 时，`rust/Cargo.toml` 的包版本为 `1.0.0`，对应提交的 tag 为 `v1.0.0`，Flutter 构建号为 `1`。推送 tag 后，GitHub Actions 运行 Rust 和 Flutter 检查，构建命令行、桌面安装包和三种 Android APK。构建与容器镜像发布成功后，工作流自动创建 GitHub Release。手动重跑时，在 Release 工作流中选择同一个 tag。
 
 Android 签名使用仓库密钥 `ANDROID_KEYSTORE_BASE64`（以 Base64 编码的发布密钥库）、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS` 和 `ANDROID_KEY_PASSWORD`。升级已安装的应用需要沿用相同的签名密钥。

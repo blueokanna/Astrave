@@ -29,6 +29,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  shaders:
+    - shaders/capsule.frag
   assets:
     - assets/astrave.png
     - assets/fonts/GoogleSans-OFL.txt

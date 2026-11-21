@@ -17,3 +17,23 @@ pub use tcp::{
     enable_keepalive, enable_nodelay, tune_tcp_stream,
 };
 pub use xff::apply_x_forwarded_for;
+
+pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Heartbeat age uses a monotonic clock even when the system clock changes.
+pub struct Heartbeat(std::sync::Mutex<std::time::Instant>);
+
+impl Default for Heartbeat {
+    fn default() -> Self {
+        Self(std::sync::Mutex::new(std::time::Instant::now()))
+    }
+}
+
+impl Heartbeat {
+    pub fn received(&self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = std::time::Instant::now();
+    }
+    pub fn age(&self) -> std::time::Duration {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).elapsed()
+    }
+}
