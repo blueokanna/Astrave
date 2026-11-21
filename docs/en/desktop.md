@@ -12,6 +12,10 @@ Tunnel rows show the path incoming traffic follows from the public endpoint to t
 
 Settings also controls language, light or dark appearance, dynamic color and seed palettes. On Android the floating navigation capsule can use a solid surface, Gaussian blur, tinted Aero Glass or Liquid Glass styling. The glass styles sample the content beneath the capsule. Liquid Glass adds edge refraction on Impeller and uses a translucent gradient over blur on other renderers. High contrast selects the solid surface. Your choices persist across restarts.
 
+<img src="../img/android-settings.png" alt="Settings on an Android 13 emulator with the floating navigation capsule" width="320">
+
+![Settings on Windows in dark mode](/img/desktop-settings.png)
+
 ![Astrave Desktop](/img/desktop.png)
 
 The four destinations share a Material 3 Expressive spring. One Flutter ticker uses the display's vsync timestamps to position and fade both pages during paint. The system selects the active refresh mode. Reversing direction preserves the current positions and the editor state. Reduced motion switches pages immediately. Widget tests exercise simulated 60, 90 and 120 Hz frame intervals and a change from 60 to 120 Hz during a transition.

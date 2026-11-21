@@ -71,7 +71,15 @@ sidebar_label: 性能测试
 
 三轮测量中，客户端和服务端的工作集均有下降。改造前各轮吞吐为 342.6–420.3 MiB/s，改造后为 387.2–413.3 MiB/s，两组范围重叠。上述内存数值只覆盖 Windows 原生进程。Android 应用还需计入 Flutter 引擎、图形资源及系统分摊的共享页。各轮内存、吞吐及管理 API 延迟的原始记录见 `docs/benchmarks/flat-windows-memory.jsonl`。
 
-Android 对照计划在同一台 API 33 x86_64 模拟器上，分别测量新旧 APK 在断开和保持 32 条 TLS 连接时的应用进程 PSS。模拟器上的回显探测成功，但包管理器在安装旧版 APK 时返回 `Broken pipe (32)`，随后 Activity 服务不可用。本次未取得成对的 PSS 样本，Android 应用进程的内存变化仍待测量。
+2026 年 11 月 21 日，三份 x86_64 Release APK 在同一台 Android 13 模拟器上依次运行（540 × 1060，240 dpi）。三版打开相同配置，使用本地 CA 验证 TLS 网关，逐一校验 32 KiB 回显并保持 32 条 TCP 流打开。表中每项为同一进程连续三次 `adb shell dumpsys meminfo dev.astrave.astrave` 的 TOTAL PSS 中位数，单位 MiB。原始记录包含各 APK 的 SHA-256 和每次读数。[Android 原始样本](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/android-pss.jsonl)
+
+| Android 版本 | 断开连接 | 保持 32 条连接 |
+| --- | ---: | ---: |
+| 启用 16 KiB 转发缓冲前 | 121.68 | 125.30 |
+| 启用 16 KiB 转发缓冲后 | 123.86 | 126.40 |
+| 加入导航胶囊和设置后 | 123.37 | 126.39 |
+
+这些整进程读数包含 Dart、Flutter、原生代码和映射共享页的分摊。各版仅启动一次，尚无证据表明 Android PSS 持续下降。实体手机和长期后台运行仍待测量。
 
 ## UDP 内存和传输层丢包恢复
 

@@ -31,6 +31,7 @@ cargo run --locked --bin astrave -- -c conf/astrave.toml
 ## Android 手机客户端
 
 <img src="docs/static/img/android-zh.png" alt="Android 13 模拟器上的 Astrave 已通过 TLS 连上 TCP 隧道" width="280">
+<img src="docs/static/img/android-settings-zh.png" alt="Android 设置中的语言、主题、配色、导航胶囊背景和证书" width="280">
 
 使用 Flutter 3.47.9、JDK 17、Android SDK（API 36）和 NDK 28.2.13676358。在 `app/` 目录执行以下命令，按处理器架构构建 APK。最低系统版本为 Android 7.0（API 24）。
 

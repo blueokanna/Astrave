@@ -12,6 +12,10 @@ title: Android 与桌面客户端
 
 在设置中可选择语言、明暗主题、系统动态色或预设配色。Android 悬浮导航胶囊支持纯色、高斯模糊、Aero Glass 着色玻璃和 Liquid Glass 风格。玻璃背景取样自胶囊下方的页面内容。Liquid Glass 在 Impeller 上增加边缘折射，其他渲染器使用模糊和半透明渐变；高对比度模式使用纯色。偏好会在重启后恢复。
 
+<img src="../img/android-settings-zh.png" alt="Android 13 模拟器中的中文设置和悬浮胶囊导航栏" width="320">
+
+![Windows 深色主题下的中文设置](/img/desktop-settings-zh.png)
+
 ![Astrave 桌面客户端的已连接隧道](/img/desktop-zh.png)
 
 四个页面共用 Material 3 Expressive 弹簧动效。Flutter 使用同一个 ticker，根据屏幕的 vsync 时间戳在绘制阶段更新两个页面的位置和透明度。当前刷新模式由系统选择。中途反向操作会保留页面位置和编辑状态，开启系统减弱动态效果时立即换页。组件测试覆盖了模拟的 60、90、120 Hz 帧间隔，以及切换途中从 60 升至 120 Hz 的情况。

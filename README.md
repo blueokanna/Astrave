@@ -31,6 +31,7 @@ Open `http://127.0.0.1:9000/img/logo.png`. The browser receives the image from p
 ## Android
 
 <img src="docs/static/img/android.png" alt="Astrave connected to a TCP tunnel over TLS on an Android 13 emulator" width="280">
+<img src="docs/static/img/android-settings.png" alt="Android settings for language, theme, color palette, navigation glass and certificates" width="280">
 
 From `app/`, use Flutter 3.47.9, JDK 17, the Android SDK (API 36) and NDK 28.2.13676358. Build the per-ABI APKs for Android 7.0 (API 24) and later:
 

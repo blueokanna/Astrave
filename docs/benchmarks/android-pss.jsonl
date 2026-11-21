@@ -1,0 +1,3 @@
+{"build": "before-flat", "apkSha256": "ff91a8a80b532055c696a0ccc8e85b8ab0f5ba320e2dfdc4a84aee37d4543694", "sdk": 33, "abi": "x86_64", "idlePssKiB": [124995, 124600, 124540], "connectedPssKiB": [128312, 128304, 128304], "connections": 32, "echoBytes": 32768}
+{"build": "flat", "apkSha256": "6f1af77cf5e756335f18c81da8ca1ab4d7b4c606ce46891cfe0149f7e6745817", "sdk": 33, "abi": "x86_64", "idlePssKiB": [126753, 126849, 126829], "connectedPssKiB": [129441, 129429, 129429], "connections": 32, "echoBytes": 32768}
+{"build": "settings", "apkSha256": "80c1d193797562f9ad80ce3d36f74b92f4f0c8accac8e794f5c564a1af2a8ecf", "sdk": 33, "abi": "x86_64", "idlePssKiB": [126176, 126344, 126328], "connectedPssKiB": [129424, 129416, 129420], "connections": 32, "echoBytes": 32768}

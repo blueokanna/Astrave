@@ -71,7 +71,15 @@ Each active TCP relay now requests 16 KiB per direction, saving 32 KiB across bo
 
 The working sets fell in all three trials. Throughput ranged from 342.6 to 420.3 MiB/s before the change and from 387.2 to 413.3 MiB/s after it. The ranges overlap. These memory figures cover native Windows processes. The Android app also loads the Flutter engine and graphics resources, and its PSS includes a proportion of shared pages. The samples, including per-trial API timings, are in `docs/benchmarks/flat-windows-memory.jsonl`.
 
-The Android comparison was designed to measure application PSS on one API 33 x86_64 emulator for each APK, first while disconnected and then with 32 active TLS connections. The emulator reached the echo service, but its package manager returned `Broken pipe (32)` while installing the baseline APK. The activity service then became unavailable. The run yielded no paired PSS samples, so the change in Android process memory remains unmeasured.
+On 21 November 2026 three x86_64 release APKs ran sequentially on the same Android 13 emulator (540 × 1060 at 240 dpi). Each opened the same profile with a local CA, authenticated the gateway over TLS, then kept 32 TCP streams open after verifying a 32 KiB echo on each. Each cell is the median of three `adb shell dumpsys meminfo dev.astrave.astrave` TOTAL PSS readings in one process, in MiB. The APK digests and individual readings identify the builds. [Raw Android samples](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/android-pss.jsonl)
+
+| Android build | Disconnected | With 32 open streams |
+| --- | ---: | ---: |
+| Before the 16 KiB relay buffers | 121.68 | 125.30 |
+| With 16 KiB relay buffers | 123.86 | 126.40 |
+| With the navigation capsule and Settings | 123.37 | 126.39 |
+
+These whole-app readings include Dart, Flutter, native code and proportional shares of mapped pages. One launch per build provides no evidence of a repeatable Android PSS reduction. Physical devices and long-running background sessions were outside this test.
 
 ## UDP memory and transport loss recovery
 

@@ -6,7 +6,7 @@ use courierust::{
     courierust_http::{method::Method, request::Request, response::Response, status::StatusCode},
     courierust_server::{Handler, Server},
 };
-use pulldown_cmark::{Options, Parser, html};
+use pulldown_cmark::{Event, Options, Parser, Tag, html};
 use std::{
     env, fs, io,
     path::{Component, Path, PathBuf},
@@ -47,17 +47,31 @@ fn build(root: &Path, dest: &Path, release: Option<&releases::Release>) -> io::R
             let relative = page.to_string_lossy().replace('\\', "/");
             let up = "../".repeat(page.components().count() - 1);
             let other = if lang == "en" { "zh" } else { "en" };
-            let body = body
-                .replace(".md)", ".html)")
-                .replace("](/img/", &format!("]({up}../img/"));
+            let events = Parser::new_ext(
+                body,
+                Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH,
+            )
+            .map(|mut event| {
+                if let Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) =
+                    &mut event
+                {
+                    if let Some(asset) = dest_url.strip_prefix("/img/") {
+                        *dest_url = format!("{up}../img/{asset}").into();
+                    } else {
+                        let (path, suffix) =
+                            dest_url.split_at(dest_url.find(['#', '?']).unwrap_or(dest_url.len()));
+                        if !path.starts_with('/')
+                            && !path.contains(':')
+                            && let Some(page) = path.strip_suffix(".md")
+                        {
+                            *dest_url = format!("{page}.html{suffix}").into();
+                        }
+                    }
+                }
+                event
+            });
             let mut markup = String::new();
-            html::push_html(
-                &mut markup,
-                Parser::new_ext(
-                    &body,
-                    Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH,
-                ),
-            );
+            html::push_html(&mut markup, events);
             if relative == "download.html" {
                 markup.push_str(&releases::downloads(release, lang));
             }
