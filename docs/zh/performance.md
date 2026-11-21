@@ -69,7 +69,9 @@ sidebar_label: 性能测试
 | 服务端工作集 / 私有字节 | 12.96 / 7.82 MiB | 10.99 / 5.95 MiB |
 | 校验通过的双向吞吐 | 363.3 MiB/s | 392.9 MiB/s |
 
-三轮测量中，客户端和服务端的工作集均有下降。改造前各轮吞吐为 342.6–420.3 MiB/s，改造后为 387.2–413.3 MiB/s，两组范围重叠。各轮内存、吞吐及管理 API 延迟的原始记录见 `docs/benchmarks/flat-windows-memory.jsonl`。
+三轮测量中，客户端和服务端的工作集均有下降。改造前各轮吞吐为 342.6–420.3 MiB/s，改造后为 387.2–413.3 MiB/s，两组范围重叠。上述内存数值只覆盖 Windows 原生进程。Android 应用还需计入 Flutter 引擎、图形资源及系统分摊的共享页。各轮内存、吞吐及管理 API 延迟的原始记录见 `docs/benchmarks/flat-windows-memory.jsonl`。
+
+Android 对照计划在同一台 API 33 x86_64 模拟器上，分别测量新旧 APK 在断开和保持 32 条 TLS 连接时的应用进程 PSS。模拟器上的回显探测成功，但包管理器在安装旧版 APK 时返回 `Broken pipe (32)`，随后 Activity 服务不可用。本次未取得成对的 PSS 样本，Android 应用进程的内存变化仍待测量。
 
 ## 时间和空间复杂度
 

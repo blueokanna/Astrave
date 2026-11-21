@@ -23,12 +23,14 @@ jobs:
         with:
           toolchain: ${{ env.RUST_VERSION }}
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
-      - run: sdkmanager 'ndk;28.2.13676358' 'platforms;android-36'
+      - name: Install Android SDK packages
+        run: |
+          JAVA_HOME="$JAVA_HOME_21_X64" "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            'platform-tools' 'platforms;android-36' 'ndk;28.2.13676358'
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.47.9'
@@ -48,9 +50,9 @@ jobs:
       - name: Build Android APKs
         working-directory: app
         env:
-          ASTRAVE_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-          ASTRAVE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ASTRAVE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ASTRAVE_STORE_PASSWORD: ${{ inputs.release_version != '' && secrets.ANDROID_STORE_PASSWORD || '' }}
+          ASTRAVE_KEY_ALIAS: ${{ inputs.release_version != '' && secrets.ANDROID_KEY_ALIAS || '' }}
+          ASTRAVE_KEY_PASSWORD: ${{ inputs.release_version != '' && secrets.ANDROID_KEY_PASSWORD || '' }}
         run: |
           flutter pub get --enforce-lockfile
           ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358" flutter build apk --release --split-per-abi --no-pub
@@ -58,12 +60,16 @@ jobs:
         if: inputs.release_version != ''
         env:
           VERSION: ${{ inputs.release_version }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           mkdir -p dist/android
           signer=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
+          expected=$(keytool -exportcert -keystore "$ASTRAVE_KEYSTORE" -storepass:env STORE_PASSWORD -alias "$KEY_ALIAS" | sha256sum | cut -d' ' -f1)
           for abi in arm64-v8a armeabi-v7a x86_64; do
             apk="app/build/app/outputs/flutter-apk/app-$abi-release.apk"
-            "$signer" verify "$apk"
+            "$signer" verify --print-certs "$apk" > "$RUNNER_TEMP/apk-signer.txt"
+            grep -Fx "Signer #1 certificate SHA-256 digest: $expected" "$RUNNER_TEMP/apk-signer.txt"
             cp "$apk" "dist/android/astrave_${VERSION}_android_$abi.apk"
           done
       - uses: actions/upload-artifact@v4

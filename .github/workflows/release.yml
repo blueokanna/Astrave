@@ -7,8 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
   meta:
@@ -23,9 +22,12 @@ jobs:
         id: ver
         run: |
           set -euo pipefail
-          [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" == v* ]] || { echo 'Select the release tag to run this workflow.' >&2; exit 1; }
-          V="${GITHUB_REF_NAME#v}"
           CARGO_V=$(python -c 'import tomllib; print(tomllib.load(open("rust/Cargo.toml", "rb"))["package"]["version"])')
+          V="$CARGO_V"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            [[ "$GITHUB_REF_NAME" == v* ]]
+            V="${GITHUB_REF_NAME#v}"
+          fi
           APP_V=$(sed -nE 's/^version:[[:space:]]*([^[:space:]#]+).*/\1/p' app/pubspec.yaml)
           if [[ "$CARGO_V" != "$V" || "${APP_V%%+*}" != "$V" || ( "$APP_V" == *+* && ! "${APP_V#*+}" =~ ^[0-9]+$ ) ]]; then
             echo "Version mismatch between $GITHUB_REF_NAME, Cargo $CARGO_V and Flutter $APP_V" >&2
@@ -34,6 +36,7 @@ jobs:
           echo "version=$V" >> "$GITHUB_OUTPUT"
 
   verify:
+    if: github.ref_type == 'tag'
     needs: meta
     uses: ./.github/workflows/ci.yml
     with:
@@ -45,18 +48,19 @@ jobs:
     uses: ./.github/workflows/release-binaries.yml
     with:
       version: ${{ needs.meta.outputs.version }}
-    secrets: inherit
 
   desktop:
     needs: meta
     uses: ./.github/workflows/release-desktop.yml
     with:
       version: ${{ needs.meta.outputs.version }}
-    secrets: inherit
 
   ship:
+    if: github.ref_type == 'tag'
     needs: [meta, verify, binaries, desktop]
+    permissions:
+      contents: write
+      packages: write
     uses: ./.github/workflows/release-ship.yml
     with:
       version: ${{ needs.meta.outputs.version }}
-    secrets: inherit

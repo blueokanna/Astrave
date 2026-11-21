@@ -125,8 +125,27 @@ jobs:
           path: artifacts
           name: android-apks
 
-      - name: List artifacts
-        run: find artifacts -type f | sort
+      - name: Verify the release asset list
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          cd artifacts
+          {
+            for name in astrave astrave-server; do
+              for arch in amd64 arm64; do
+                for platform in windows darwin; do echo "${name}_${VERSION}_${platform}_${arch}.tar.gz"; done
+                for libc in gnu musl; do echo "${name}_${VERSION}_linux_${arch}_${libc}.tar.gz"; done
+              done
+              echo "${name}_${VERSION}_freebsd_amd64.tar.gz"
+            done
+            for arch in amd64 arm64; do
+              echo "astrave-desktop_${VERSION}_darwin_${arch}.dmg"
+              echo "astrave-desktop_${VERSION}_windows_${arch}.zip"
+              echo "astrave-desktop_${VERSION}_linux_${arch}.deb"
+            done
+            for abi in arm64-v8a armeabi-v7a x86_64; do echo "astrave_${VERSION}_android_${abi}.apk"; done
+          } | sort > "$RUNNER_TEMP/expected-assets"
+          find . -type f -size +0c -printf '%P\n' | sort | diff -u "$RUNNER_TEMP/expected-assets" -
 
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2

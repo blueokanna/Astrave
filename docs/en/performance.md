@@ -69,7 +69,9 @@ Each active TCP relay now requests 16 KiB per direction, saving 32 KiB across bo
 | Server working set / private bytes | 12.96 / 7.82 MiB | 10.99 / 5.95 MiB |
 | Verified duplex throughput | 363.3 MiB/s | 392.9 MiB/s |
 
-The working sets fell in all three trials. Throughput ranged from 342.6 to 420.3 MiB/s before the change and from 387.2 to 413.3 MiB/s after it. The ranges overlap. The samples, including per-trial API timings, are in `docs/benchmarks/flat-windows-memory.jsonl`.
+The working sets fell in all three trials. Throughput ranged from 342.6 to 420.3 MiB/s before the change and from 387.2 to 413.3 MiB/s after it. The ranges overlap. These memory figures cover native Windows processes. The Android app also loads the Flutter engine and graphics resources, and its PSS includes a proportion of shared pages. The samples, including per-trial API timings, are in `docs/benchmarks/flat-windows-memory.jsonl`.
+
+The Android comparison was designed to measure application PSS on one API 33 x86_64 emulator for each APK, first while disconnected and then with 32 active TLS connections. The emulator reached the echo service, but its package manager returned `Broken pipe (32)` while installing the baseline APK. The activity service then became unavailable. The run yielded no paired PSS samples, so the change in Android process memory remains unmeasured.
 
 ## Time and space costs
 
