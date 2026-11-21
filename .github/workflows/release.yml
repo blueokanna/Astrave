@@ -2,8 +2,12 @@ name: Release
 
 on:
   push:
+    branches: [main]
     tags:
       - "v*"
+    paths:
+      - rust/Cargo.toml
+      - app/pubspec.yaml
   workflow_dispatch:
 
 permissions:
@@ -14,9 +18,12 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.ver.outputs.version }}
+      build: ${{ steps.ver.outputs.build }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Resolve version
         id: ver
@@ -33,11 +40,22 @@ jobs:
             echo "Version mismatch between $GITHUB_REF_NAME, Cargo $CARGO_V and Flutter $APP_V" >&2
             exit 1
           fi
+          build=true
+          if [[ "$GITHUB_REF_TYPE" == branch ]] && git show-ref --verify --quiet "refs/tags/v$V"; then
+            if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+              echo "::notice::v$V is already tagged. Bump the Cargo and Flutter versions to publish another release."
+              build=false
+            elif [[ $(git rev-parse "refs/tags/v$V^{commit}") != $(git rev-parse HEAD) ]]; then
+              echo "::error::v$V already belongs to another commit. Select that tag to rebuild it, or bump both versions."
+              exit 1
+            fi
+          fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
 
   verify:
-    if: github.ref_type == 'tag'
     needs: meta
+    if: needs.meta.outputs.build == 'true'
     uses: ./.github/workflows/ci.yml
     with:
       release_version: ${{ needs.meta.outputs.version }}
@@ -45,19 +63,23 @@ jobs:
 
   binaries:
     needs: meta
+    if: needs.meta.outputs.build == 'true'
     uses: ./.github/workflows/release-binaries.yml
     with:
       version: ${{ needs.meta.outputs.version }}
 
   desktop:
     needs: meta
+    if: needs.meta.outputs.build == 'true'
     uses: ./.github/workflows/release-desktop.yml
     with:
       version: ${{ needs.meta.outputs.version }}
 
   ship:
-    if: github.ref_type == 'tag'
     needs: [meta, verify, binaries, desktop]
+    concurrency:
+      group: publish-v${{ needs.meta.outputs.version }}
+      cancel-in-progress: false
     permissions:
       contents: write
       packages: write

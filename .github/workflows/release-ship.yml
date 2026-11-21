@@ -19,6 +19,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Pin the release tag to the tested commit
+        env:
+          TAG: v${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          ref="refs/tags/$TAG"
+          if git ls-remote --exit-code --refs origin "$ref" >/dev/null; then
+            git fetch --no-tags origin "$ref"
+            if [[ $(git rev-parse 'FETCH_HEAD^{commit}') != $(git rev-parse HEAD) ]]; then
+              echo "::error::$TAG points to a different commit."
+              exit 1
+            fi
+          else
+            rc=$?
+            [[ $rc == 2 ]] || exit "$rc"
+            git push origin "HEAD:$ref"
+          fi
+
       - name: Download Docker slices
         uses: actions/download-artifact@v4
         with:
@@ -174,3 +192,15 @@ jobs:
             artifacts/*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify published release assets against the staged packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum * | LC_ALL=C sort > "$RUNNER_TEMP/local-assets.sha256"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
+            --jq '.assets[] | select(.state == "uploaded") | [(.digest | ltrimstr("sha256:")), .name] | join("  ")' \
+            | LC_ALL=C sort | diff -u "$RUNNER_TEMP/local-assets.sha256" -
