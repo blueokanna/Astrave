@@ -5,6 +5,21 @@ sidebar_label: 性能测试
 
 # 性能测量
 
+## 独立内核的运行内存
+
+2026 年 11 月 23 日，Windows x64 发布版在回环上运行一个 TCP 隧道，启用 Token、mTLS 与多路复用。每种状态每轮按 100 ms 间隔读取进程工作集 20 次，表中为三轮独立进程的轮内中位数再取中位数。在线空闲时已完成一次回显。负载阶段八条连接各自循环校验 64 KiB 回显，三轮合计 4.64 GiB 双向数据。
+
+| 状态 | Rust 客户端 | Rust 网关 |
+| --- | ---: | ---: |
+| 尚未连接（客户端等待重试，网关单独监听） | 8.56 MiB | 6.66 MiB |
+| 在线空闲 | 9.05 MiB | 7.76 MiB |
+| 八路持续转发 | 11.43 MiB | 10.59 MiB |
+| 转发阶段的最高采样值 | 11.71 MiB | 10.86 MiB |
+
+网关概览及认证后的 `/api/v1/system/info` 显示网关进程的内存和 CPU。`data.process.residentBytes` 的单位为字节，无法采样时为 `null`。Flutter 概览显示包含界面、Flutter 引擎和 Rust 内核的整个应用进程。可用 `uv run --with psutil scripts/measure-memory.py target/release` 复测独立进程。[原始工作集样本](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/mtls-memory-windows.jsonl)
+
+另起 Windows 桌面 Release 进程，打开概览，保持客户端未连接。窗口显示七秒后，连续二十次工作集采样的中位数是 **144.50 MiB**。概览自身每隔约五秒采样，读数会随界面绘制和后台工作变化。
+
 ## TCP 缓冲调整的 Windows 回环实测
 
 2026 年 11 月 20 日，在同一台 Windows 10 x64、Intel Core i7-11850H 机器上对比两份本地 Release，工具链为 Rust 1.95.0 和 Dart 3.13.7。每个版本运行三轮，每轮由一个客户端注册 128 条 TCP 隧道，开启 TCP 多路复用，关闭 TLS。同一条隧道建立 64 条连接，每条先完成一次往返，再采样两个进程的内存。随后用其中 8 条连接并发传输，每条完成 512 次 64 KiB 回显并逐字节校验，双向合计 512 MiB。内存值不含回显服务、压测程序和 Flutter 图形界面。

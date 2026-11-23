@@ -1,0 +1,9 @@
+# Used by `astrave cloud-cert provider|issue|renew -c conf/cloud-cert.toml`.
+# Driver credentials come from the environment of lego or workload identity.
+[cloudCert]
+provider = "route53"
+domains = ["gateway.example.com"]
+email = "operator@example.com"
+storageDir = "./acme-staging"
+staging = true
+acceptTerms = false

@@ -6,7 +6,9 @@ use anyhow::{Context, Result, bail, ensure};
 use astrave_desktop::core::{
     config::{LogConfig, parse_config_toml},
     io::join,
-    logging, transport,
+    logging,
+    net::enable_nodelay,
+    transport,
 };
 use courierust::courierust_crypto::sha256::sha256;
 use quinn::{Connection, Endpoint, EndpointConfig};
@@ -170,9 +172,15 @@ async fn connect(
         // Quinn owns all reads. Probes leave through the same mapped UDP port.
         timeout(HANDSHAKE, async {
             let mut interval = tokio::time::interval(Duration::from_millis(200));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tokio::select! {
-                    _ = interval.tick() => { probe.send_to(b"\0", remote)?; }
+                    _ = interval.tick() => {
+                        if let Err(err) = probe.send_to(b"\0", remote)
+                            && err.kind() != std::io::ErrorKind::WouldBlock {
+                            return Err(err.into());
+                        }
+                    }
                     incoming = endpoint.accept() => {
                         let incoming = incoming.context("endpoint closed")?;
                         if incoming.remote_address() == remote {
@@ -210,6 +218,7 @@ async fn forward(
             }
             socket = async { listener.unwrap().accept().await }, if listener.is_some() && streams.len() < STREAM_LIMIT => {
                 let (socket, _) = socket?;
+                enable_nodelay(&socket);
                 let link = link.clone();
                 streams.spawn(async move {
                     let (mut send, recv) = link.open_bi().await?;
@@ -226,6 +235,7 @@ async fn forward(
                     timeout(HANDSHAKE, recv.read_exact(&mut marker)).await??;
                     ensure!(marker == [1], "unknown peer stream type");
                     let socket = timeout(HANDSHAKE, TcpStream::connect(local)).await??;
+                    enable_nodelay(&socket);
                     join(socket, transport::QuicBiStream::new(send, recv)).await?;
                     Ok(())
                 });

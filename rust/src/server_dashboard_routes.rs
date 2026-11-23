@@ -7,8 +7,8 @@
 
 use super::DashState;
 use super::model::{
-    ApiResponse, ClientInfo, Page, SystemConfig, SystemInfo, TunnelInfo, TunnelTrafficPoint,
-    TunnelTrafficResp,
+    ApiResponse, ClientInfo, Page, ProcessInfo, SystemConfig, SystemInfo, TunnelInfo,
+    TunnelTrafficPoint, TunnelTrafficResp,
 };
 use crate::metrics::{TrafficWindow, TunnelTrafficHistory};
 use astrave_desktop::core::VERSION;
@@ -23,11 +23,16 @@ use std::sync::Arc;
 pub struct Dashboard {
     pub(super) state: Arc<DashState>,
     runtime: tokio::runtime::Handle,
+    meter: std::sync::Mutex<astrave_desktop::process_stats::ProcessMeter>,
 }
 
 impl Dashboard {
     pub fn new(state: Arc<DashState>, runtime: tokio::runtime::Handle) -> Self {
-        Self { state, runtime }
+        Self {
+            state,
+            runtime,
+            meter: Default::default(),
+        }
     }
 
     pub(super) fn blocking<T>(&self, fut: impl std::future::Future<Output = T>) -> T {
@@ -93,7 +98,16 @@ impl Handler for Dashboard {
 impl Dashboard {
     pub(super) fn system_info(&self) -> ApiResponse<SystemInfo> {
         let cfg = self.state.svc.cfg();
+        let usage = self
+            .meter
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .sample();
         ApiResponse::ok(SystemInfo {
+            process: ProcessInfo {
+                resident_bytes: (usage.memory_bytes > 0).then_some(usage.memory_bytes),
+                cpu_percent: f64::from(usage.cpu_percent),
+            },
             version: VERSION.to_string(),
             config: SystemConfig {
                 listen: cfg.listen.clone(),

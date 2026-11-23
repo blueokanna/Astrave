@@ -1,6 +1,7 @@
 """Exercise the release binaries on loopback with an ephemeral CA and real sockets."""
 
 import argparse
+import asyncio
 import base64
 import http.client
 import json
@@ -140,7 +141,12 @@ class LossRelay:
             while not stop.is_set():
                 if not select.select([sock], [], [], 0.1)[0]:
                     continue
-                payload, source = sock.recvfrom(65535)
+                try:
+                    payload, source = sock.recvfrom(65535)
+                except ConnectionResetError:
+                    # Windows reports ICMP port-unreachable here if the first
+                    # datagram arrives before the gateway has bound its port.
+                    continue
                 direction = int(source == (HOST, upstream))
                 if direction == 0:
                     peer = source
@@ -221,8 +227,11 @@ def ready(mapped, client, log):
     )
 
 
-def check(bin_dir, work, proto, origins, tls):
+def check(bin_dir, work, proto, origins, tls, *, wss_edge=None, mux=True):
     control, mapped, http, https, socks, dashboard = ports(6)
+    if wss_edge:
+        control, edge_port, access_id, access_secret = wss_edge
+    mux_value = str(mux).lower()
     transport_udp, mapped_udp = ports(2, socket.SOCK_DGRAM)
     echo, udp, web, web_tls = origins
     token = secrets.token_hex(16)
@@ -234,12 +243,14 @@ def check(bin_dir, work, proto, origins, tls):
             else str(work / "ctl.sock")
         ),
     }
+    if wss_edge:
+        env["ASTRAVE_TEST_EDGE_AUTH"] = f"Bearer {access_secret}"
     with ExitStack() as stack:
         loss = LossRelay(stack, transport_udp) if proto in ("quic", "kcp") else None
         extra = f"{proto}Port={transport_udp}\n" if loss else ""
         server = (
             f'listen="{HOST}:{control}"\nproxyAddr="{HOST}"\n{extra}httpGwPort={http}\nhttpsGwPort={https}\n'
-            f'auth.token="{token}"\ntransport.tcpMux=true\n[transport.tls]\nforce=true\ncertFile="server.pem"\n'
+            f'auth.token="{token}"\ntransport.tcpMux={mux_value}\n[transport.tls]\nforce=true\ncertFile="server.pem"\n'
             f'keyFile="server.key"\ntrustedCaFile="ca.pem"\n[dashboard]\naddr="{HOST}"\nport={dashboard}\nuser="test"\npassword="{token}"\n'
         )
         if proto == "tcp":
@@ -254,9 +265,20 @@ def check(bin_dir, work, proto, origins, tls):
             stack.enter_context(
                 running(bin_dir, work, "astrave-server", server, "gateway", env)
             )
+        endpoint = (
+            f"localhost:{edge_port}" if wss_edge else f"{HOST}:{loss.port if loss else control}"
+        )
+        edge_options = (
+            'transport.wsTrustedCaFile="edge/ca.pem"\n'
+            'transport.wsHeaderEnv.Authorization="ASTRAVE_TEST_EDGE_AUTH"\n'
+            f'transport.cloudflareAccess.clientId="{access_id}"\n'
+            f'transport.cloudflareAccess.clientSecret="{access_secret}"\n'
+            if wss_edge
+            else ""
+        )
         cfg = (
-            f'server="{HOST}:{loss.port if loss else control}"\nauth.token="{token}"\ntransport.protocol="{proto}"\n'
-            'transport.tcpMux=true\n[transport.tls]\nenable=true\nserverName="localhost"\n'
+            f'server="{endpoint}"\nauth.token="{token}"\ntransport.protocol="{proto}"\n{edge_options}'
+            f'transport.tcpMux={mux_value}\n[transport.tls]\nenable=true\nserverName="pass.test"\n'
             'trustedCaFile="ca.pem"\ncertFile="client.pem"\nkeyFile="client.key"\n'
             f'[[tunnels]]\nname="echo"\nprotocol="tcp"\nservice="{HOST}:{echo}"\nremotePort={mapped}\n'
         )
@@ -330,6 +352,12 @@ def check(bin_dir, work, proto, origins, tls):
                 raise RuntimeError("Dashboard did not list all six tunnels")
             time.sleep(0.1)
         assert get_http(dashboard, HOST, "/api/v1/tunnels")[0] == 401
+        status, body = get_http(
+            dashboard, HOST, "/api/v1/system/info", credentials=credentials
+        )
+        assert status == 200
+        usage = json.loads(body)["data"]["process"]
+        assert usage["residentBytes"] > 0 and usage["cpuPercent"] >= 0
         for gateway, host, request, response, ctx in [
             (http, "site.test", "/api/x", b"/api/x origin.test", None),
             (https, "pass.test", "/pass", b"/pass pass.test", tls),
@@ -387,10 +415,123 @@ def check(bin_dir, work, proto, origins, tls):
         )
 
 
+async def check_wss(bin_dir, work, origins, tls, edge_tls, mux):
+    (control,) = ports(1)
+    access_id, access_secret = secrets.token_hex(16), secrets.token_hex(32)
+    edge_names = []
+    edge_tls.set_servername_callback(lambda sock, name, ctx: edge_names.append(name))
+    client_certs = []
+
+    async def proxy(reader, writer):
+        # Terminate only the public TLS layer. The gateway receives HTTP Upgrade
+        # and authenticates the Astrave client inside the upgraded stream.
+        client_certs.append(writer.get_extra_info("peercert"))
+        upstream = None
+        tasks = []
+        try:
+            head = await reader.readuntil(b"\r\n\r\n")
+            fields = head.split(b"\r\n")
+            if (
+                f"CF-Access-Client-Id: {access_id}".encode() not in fields
+                or f"CF-Access-Client-Secret: {access_secret}".encode() not in fields
+                or f"Authorization: Bearer {access_secret}".encode() not in fields
+            ):
+                writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                await writer.drain()
+                return
+            source, upstream = await asyncio.open_connection(HOST, control)
+            upstream.write(head)
+            await upstream.drain()
+
+            async def copy(src, dst):
+                while data := await src.read(65536):
+                    dst.write(data)
+                    await dst.drain()
+
+            tasks = [
+                asyncio.create_task(copy(reader, upstream)),
+                asyncio.create_task(copy(source, writer)),
+            ]
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        except (OSError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            writer.close()
+            if upstream:
+                upstream.close()
+
+    async with await asyncio.start_server(proxy, HOST, 0, ssl=edge_tls) as edge:
+        port = edge.sockets[0].getsockname()[1]
+        await asyncio.to_thread(
+            check, bin_dir, work, "wss", origins, tls,
+            wss_edge=(control, port, access_id, access_secret), mux=mux,
+        )
+    assert edge_names and all(name == "localhost" for name in edge_names)
+    assert client_certs and all(cert is None for cert in client_certs)
+
+
+def check_caddy(caddy, bin_dir, work, origins, tls):
+    control, port = ports(2)
+    secret = secrets.token_hex(32)
+    config = work / "Caddyfile"
+    config.write_text(f"""{{
+    admin off
+    auto_https off
+    persist_config off
+}}
+https://localhost:{port} {{
+    bind {HOST}
+    tls edge/server.pem edge/server.key
+    route {{
+        @authorized header Authorization "Bearer {secret}"
+        reverse_proxy @authorized {HOST}:{control} {{
+            header_up -Authorization
+            header_up -CF-Access-Client-Id
+            header_up -CF-Access-Client-Secret
+        }}
+        respond 403
+    }}
+}}
+""")
+    with subprocess.Popen(
+        [caddy, "run", "--config", config, "--adapter", "caddyfile"],
+        cwd=work,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env={
+            **os.environ,
+            "XDG_DATA_HOME": str(work),
+            "XDG_CONFIG_HOME": str(work),
+            "APPDATA": str(work),
+            "LOCALAPPDATA": str(work),
+        },
+    ) as edge:
+        try:
+            for mux in (True, False):
+                check(
+                    bin_dir, work, "wss", origins, tls,
+                    wss_edge=(control, port, "integration", secret), mux=mux,
+                )
+            trust = ssl.create_default_context(cafile=str(work / "edge" / "ca.pem"))
+            assert get_http(port, "localhost", "/", trust)[0] == 403
+            print(
+                "Caddy WSS bearer authentication, origin mTLS and echo verified in both multiplex modes",
+                flush=True,
+            )
+        finally:
+            edge.terminate()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binaries", type=Path)
     parser.add_argument("--openssl", default=shutil.which("openssl") or "openssl")
+    parser.add_argument(
+        "--caddy", help="also verify the WSS transport through this Caddy executable"
+    )
     args = parser.parse_args()
     with (
         tempfile.TemporaryDirectory(prefix="astrave-integration-") as temp,
@@ -415,6 +556,18 @@ def main():
         for proto in ["tcp", "websocket", "quic", "kcp"]:
             check(args.binaries.resolve(), work, proto, origins, tls)
             print(proto, "verified", flush=True)
+        edge = work / "edge"
+        edge.mkdir()
+        certificates(edge, args.openssl, (("server", "serverAuth"),))
+        edge_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        edge_tls.load_cert_chain(edge / "server.pem", edge / "server.key")
+        edge_tls.load_verify_locations(work / "ca.pem")
+        edge_tls.verify_mode = ssl.CERT_OPTIONAL
+        for mux in (True, False):
+            asyncio.run(check_wss(args.binaries.resolve(), work, origins, tls, edge_tls, mux))
+            print(f"WSS edge and origin mTLS verified (tcpMux={mux})", flush=True)
+        if args.caddy:
+            check_caddy(args.caddy, args.binaries.resolve(), work, origins, tls)
 
 
 if __name__ == "__main__":

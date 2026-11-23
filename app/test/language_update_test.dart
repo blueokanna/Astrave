@@ -15,7 +15,7 @@ class _Network extends HttpOverrides {}
 
 class _LoopbackClient extends Fake implements HttpClient {
   _LoopbackClient(this.port);
-  final int port;
+  int port;
   final client = HttpClient();
   @override
   Future<HttpClientRequest> getUrl(Uri uri) =>
@@ -205,7 +205,6 @@ void main() {
         buildSignature: '',
       );
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      final port = server.port;
       final tags = <String?>[];
       server.listen((request) async {
         tags.add(request.headers.value(HttpHeaders.ifNoneMatchHeader));
@@ -225,7 +224,8 @@ void main() {
         }
         await request.response.close();
       });
-      final updates = ReleaseUpdates(client: _LoopbackClient(server.port));
+      final transport = _LoopbackClient(server.port);
+      final updates = ReleaseUpdates(client: transport);
       addTearDown(updates.dispose);
       try {
         await updates.check();
@@ -242,7 +242,10 @@ void main() {
       expect(updates.error, isNotNull);
       expect(updates.latest?.version.toString(), '1.0.12');
       expect(updates.checking, isFalse);
-      final restored = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
+      // Keep the logical release URL while routing recovery to a fresh socket.
+      // Windows can still reject a TCP connection to the recently closed port.
+      final restored = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      transport.port = restored.port;
       try {
         String? previousTag;
         restored.listen((request) async {

@@ -18,5 +18,5 @@ mod cert;
 mod client_log_layer;
 #[cfg(feature = "app")]
 mod frb_generated;
-#[cfg(feature = "app")]
-mod process_stats;
+#[cfg(feature = "runtime")]
+pub mod process_stats;

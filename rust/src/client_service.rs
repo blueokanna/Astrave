@@ -85,9 +85,8 @@ impl Service {
                     return Ok(());
                 }
                 req = reload_rx.recv() => {
-                    if let Some(req) = req {
-                        serve_reload_request(req, &cfg, None, &mut on_log).await;
-                    }
+                    let Some(req) = req else { return Ok(()) };
+                    serve_reload_request(req, &cfg, None, &mut on_log).await;
                     continue;
                 }
                 res = Control::open_session(
@@ -236,9 +235,8 @@ async fn wait_or_reload(
         _ = cancel.cancelled() => true,
         _ = sleep(Duration::from_secs(delay_secs)) => false,
         req = reload_rx.recv() => {
-            if let Some(req) = req {
-                serve_reload_request(req, cfg, None, on_log).await;
-            }
+            let Some(req) = req else { return true };
+            serve_reload_request(req, cfg, None, on_log).await;
             false
         }
     }
@@ -305,13 +303,10 @@ async fn run_session_loop(
             }
             req = reload_rx.recv() => {
                 let Some(req) = req else {
+                    control.close_all_tunnels().await;
                     control.request_disconnect();
-                    let end = done.await;
-                    return SessionLoopEnd::Session(end.unwrap_or_else(|_| {
-                        Ok(SessionEnd::Disconnected {
-                            session_id: control.session_id().to_string(),
-                        })
-                    }));
+                    let _ = done.await;
+                    return SessionLoopEnd::Cancelled;
                 };
                 match apply_reload(req.cfg, &req.config_path, cfg, Some(&control), on_log).await {
                     ApplyReloadResult::Reply(result) => {

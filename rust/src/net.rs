@@ -7,6 +7,7 @@ mod proxy_protocol;
 #[path = "net_tcp.rs"]
 mod tcp;
 
+pub(crate) use dns::connect_tcp_endpoint;
 pub use dns::{resolve_endpoint, resolve_host, resolve_socket_addr};
 pub use http_head::{apply_x_forwarded_for, forward_request_headers, read_request_head};
 pub use proxy_protocol::{

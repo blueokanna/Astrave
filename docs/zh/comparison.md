@@ -5,16 +5,19 @@ sidebar_label: 竞品对比
 
 # 内网服务该怎样对外提供访问？
 
-核对日期为 2026 年 11 月 21 日。Orbien 采用 Rust 项目 `orbien-org/orbien`。下表的竞品能力来自对应版本的上游文档和代码。
+最近核对日期为 2026 年 11 月 23 日。Orbien 采用 Rust 项目 `orbien-org/orbien`。下表的竞品能力来自对应版本的上游文档和代码。
 
 | 产品 | 访问路径 | 访问控制与运维 |
 | --- | --- | --- |
-| Astrave 1.0.0 候选版 | 客户端主动连接自建网关，由网关公开 TCP、UDP 或按域名转发 HTTP、HTTPS。SOCKS5 可通过客户端插件提供。 | Token、私有 CA 和 mTLS，支持 HTTPS 透传及客户端终止；Web 面板查看隧道，Flutter 客户端管理配置和证书。 |
+| Astrave | 客户端主动连接自建网关，由网关公开 TCP、UDP 或按域名转发 HTTP、HTTPS。另可配对两个客户端，用 QUIC 直连访问指定 TCP 服务。 | Token、私有 CA、mTLS、SOCKS5 插件、热重载。客户端和网关可独立查看驻留内存。 |
+| ngrok | Agent 连接托管入口，将公网 HTTP、TLS 或 TCP 端点转发到目标服务。公网 TCP 可申请固定地址。 | 平台负责公网入口，Traffic Policy 配置访问规则，控制台提供连接记录。本次无账号进行同条件测速。[TCP Agent Endpoints](https://ngrok.com/docs/universal-gateway/tcp) |
 | frp 0.72.0 | `frpc` 连到 `frps` 做公网端口或虚拟主机映射。STCP/SUDP 提供访客模式，XTCP 尝试建立点对点连接。 | 支持 Token 和 OIDC、客户端及服务端 Web 管理、负载均衡和健康检查。[功能文档](https://gofrp.org/zh-cn/docs/features/) · [版本](https://github.com/fatedier/frp/releases/tag/v0.72.0) |
 | Orbien 3.10.0 | 自建网关发布 TCP、UDP、HTTP、HTTPS 和 SOCKS5。可选 TCP、KCP、WebSocket 或 QUIC 传输。 | 上游列有多路复用、Token、TLS/mTLS、热重载、桌面端和 ACME。它与 Astrave 的公网转发模式最接近。[版本文档](https://github.com/orbien-org/orbien/blob/v3.10.0/README_ZH.md) |
 | Tailscale 1.104.7 | 加入 tailnet 的设备通过 WireGuard 互通。可直连时数据走设备间路径，也可经 Peer Relay 或 DERP 中继。向无客户端的公网访客提供服务可启用 Funnel。 | 以设备身份和 tailnet 访问策略授权；评估性能时需要记录 `tailscale ping` 实际选中的路径，Funnel 另测。[连接类型](https://tailscale.com/kb/1257/connection-types) · [Funnel 实现](https://github.com/tailscale/tailscale/blob/v1.104.7/cmd/tailscale/cli/funnel.go) |
 
 ## 同机实测
+
+11 月 23 日，使用下述相同驱动重新对比当前工作区的 Windows x64 Release 和 Orbien。三轮双向吞吐中位数分别为 **313.4 MiB/s**（256.7–315.7）和 **280.3 MiB/s**（225.6–323.0）；网关重启到新连接首次成功回显的中位数分别为 **1.025 秒**和 **1.522 秒**。两者吞吐范围重叠。以下表格保留较早构建的测量结果。[11 月 23 日原始样本](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/peers-windows-2026-11-23.jsonl)
 
 Windows x64 上使用同一 TCP 回显源、Token、TCP 多路复用，关闭传输 TLS。每轮预热 8 条连接，每条往返 128 次，每次 64 KiB，每轮共校验 128 MiB 双向流量。随后终止网关进程，保持原客户端运行，从启动新网关开始，计时到新连接首次收到完整的 64 KiB 回显。每版三轮交错执行。
 

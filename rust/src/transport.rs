@@ -19,6 +19,7 @@ pub use tls::{
     generate_self_signed_cert, install_ring_provider, load_pem_cert_key, new_client_tls_config,
     new_server_tls_config, server_crypto, server_crypto_from_tls_files,
 };
+pub(crate) use websocket::client_websocket_upgrade;
 pub use websocket::{
     ASTRAVE_WEBSOCKET_PATH, WsByteStream, accept_websocket, accept_websocket_on_path,
     dial_websocket, is_websocket_http_request, normalize_ws_path,
@@ -30,6 +31,7 @@ pub enum Protocol {
     Tcp,
     Quic,
     Websocket,
+    Wss,
     Kcp,
 }
 
@@ -42,6 +44,8 @@ impl Protocol {
             Some(Self::Quic)
         } else if s.eq_ignore_ascii_case("websocket") || s.eq_ignore_ascii_case("ws") {
             Some(Self::Websocket)
+        } else if s.eq_ignore_ascii_case("wss") {
+            Some(Self::Wss)
         } else if s.eq_ignore_ascii_case("kcp") {
             Some(Self::Kcp)
         } else {
@@ -54,6 +58,7 @@ impl Protocol {
             Self::Tcp => "tcp",
             Self::Quic => "quic",
             Self::Websocket => "websocket",
+            Self::Wss => "wss",
             Self::Kcp => "kcp",
         }
     }

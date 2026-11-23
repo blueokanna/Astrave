@@ -131,9 +131,8 @@ fn parse_open(input: &str, start: usize) -> Result<OpenParse<'_>> {
         if default.is_none() && find_close(input, i).is_none() {
             bail!("unclosed environment placeholder at byte {start} (missing '}}}}')");
         }
-        let snippet = snippet_at(input, start);
         bail!(
-            "invalid environment placeholder {snippet}: expected '}}}}' or ':default}}}}' after the variable name"
+            "invalid environment placeholder at byte {start}: expected '}}}}' or ':default}}}}' after the variable name"
         );
     }
     i += CLOSE.len();
@@ -192,12 +191,13 @@ fn is_ident_continue(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-fn snippet_at(input: &str, start: usize) -> String {
-    let rest = &input[start..];
-    let end = rest.find(CLOSE).map(|i| (i + CLOSE.len()).min(rest.len()));
-    let taken = match end {
-        Some(e) => &rest[..e],
-        None => &rest[..rest.len().min(48)],
-    };
-    format!("`{taken}`")
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_placeholders_do_not_echo_neighboring_credentials() {
+        let err = expand_env_placeholders("{{env.TOKEN secret-value}}").unwrap_err();
+        assert!(!err.to_string().contains("secret-value"));
+    }
 }

@@ -77,6 +77,10 @@ The Rust client supports TCP, UDP, HTTP, HTTPS and SOCKS5 tunnels with TCP, WebS
 
 The server renders the browser dashboard in Rust. Set a loopback address, port, user and password under `[dashboard]`. Open that address to inspect clients, tunnels and traffic. Use HTTPS through a reverse proxy for remote administration.
 
+To reach the gateway through Cloudflare Tunnel, select `transport.protocol = "wss"` on the client. It authenticates the public edge and the Astrave origin independently. `cloudflared` forwards upgrades to the gateway's loopback listener. [Cloudflare Tunnel configuration](docs/en/transport/protocol/websocket.md)
+
+Configure a cloud VM, authenticated WSS reverse proxy or DNS-01 provider using the deployment guide. [Cloud gateways and DNS certificates](docs/en/cloud.md)
+
 ```sh
 cargo build --release --locked --bin astrave --bin astrave-server
 ```

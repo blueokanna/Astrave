@@ -65,6 +65,13 @@ ThemeData desktopTheme(
     elevatedButtonTheme: const ElevatedButtonThemeData(
       variant: StyleVariant.material3Expressive,
     ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        minimumSize: const Size(64, 48),
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        shape: const StadiumBorder(),
+      ),
+    ),
     iconButtonTheme: const IconButtonThemeData(
       variant: StyleVariant.material3Expressive,
     ),

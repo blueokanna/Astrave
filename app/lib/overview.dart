@@ -50,6 +50,45 @@ class Overview extends StatelessWidget {
                       connect: connect,
                       edit: edit,
                     ),
+                    const SizedBox(height: Space.small),
+                    ValueListenableBuilder(
+                      valueListenable: session.usage,
+                      builder: (context, sample, _) => Card.filled(
+                        color: theme.colorScheme.secondaryContainer,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 14,
+                          ),
+                          child: Wrap(
+                            alignment: WrapAlignment.spaceBetween,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            spacing: 16,
+                            runSpacing: 6,
+                            children: [
+                              Text(
+                                text('Client process', '客户端进程'),
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  color: theme.colorScheme.onSecondaryContainer,
+                                ),
+                              ),
+                              Text(
+                                '${text('Resident memory', '驻留内存')}  ${sample == null || sample.memoryMib <= 0 ? '—' : '${sample.memoryMib.toStringAsFixed(1)} MiB'}',
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: theme.colorScheme.onSecondaryContainer,
+                                ),
+                              ),
+                              Text(
+                                'CPU  ${sample == null ? '—' : '${sample.cpuPercent.toStringAsFixed(1)}%'}',
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: theme.colorScheme.onSecondaryContainer,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                     if (session.error case final message?) ...[
                       const SizedBox(height: Space.small),
                       Card.filled(
@@ -117,6 +156,8 @@ class Overview extends StatelessWidget {
                             : null;
                         return _TunnelRow(
                           tunnel: tunnel,
+                          first: index == 0,
+                          last: index == tunnels.length - 1,
                           assigned: assigned,
                           text: text,
                           edit: session.busy || modify == null
@@ -409,11 +450,14 @@ class _ConnectionCard extends StatelessWidget {
 class _TunnelRow extends StatelessWidget {
   const _TunnelRow({
     required this.tunnel,
+    required this.first,
+    required this.last,
     required this.assigned,
     required this.text,
     required this.edit,
   });
   final Tunnel tunnel;
+  final bool first, last;
   final String? assigned;
   final LocalText text;
   final Future<void> Function(bool remove)? edit;
@@ -433,8 +477,14 @@ class _TunnelRow extends StatelessWidget {
         ? t('Public port', '映射端口')
         : t('Public endpoint', '映射端点');
     return Padding(
-      padding: const EdgeInsets.only(top: 6),
+      padding: EdgeInsets.only(top: first ? 8 : 3),
       child: Card.filled(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(first ? 24 : 6),
+            bottom: Radius.circular(last ? 24 : 6),
+          ),
+        ),
         color: colors.surfaceContainerLow,
         child: Padding(
           padding: const EdgeInsetsDirectional.fromSTEB(16, 14, 6, 14),

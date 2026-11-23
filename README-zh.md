@@ -77,6 +77,10 @@ Rust 客户端支持 TCP、UDP、HTTP、HTTPS 和 SOCKS5 隧道，传输层可�
 
 浏览器管理面板由 Rust 服务端直接生成。在 `[dashboard]` 中设置回环地址、端口、用户名和密码，即可查看客户端、隧道和流量。需要远程管理时，通过 HTTPS 反向代理访问。
 
+使用 Cloudflare Tunnel 接入网关时，客户端选择 `transport.protocol = "wss"`。公网入口和 Astrave 源站分别校验证书，`cloudflared` 转发到网关的回环监听端口。[Cloudflare Tunnel 配置示例](docs/zh/transport/protocol/websocket.md)
+
+云主机、带鉴权的 WSS 入口和多云 DNS-01 证书可按实际部署产品配置。[云网关与 DNS 证书](docs/zh/cloud.md)
+
 ```sh
 cargo build --release --locked --bin astrave --bin astrave-server
 ```

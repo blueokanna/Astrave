@@ -1,15 +1,14 @@
-use crate::core::config::ClientConfig;
-use crate::core::net::TcpKeepaliveConfig;
+use crate::core::config::{ClientConfig, CloudflareAccess};
+use crate::core::net::{TcpKeepaliveConfig, connect_tcp_endpoint, tune_tcp_stream};
 use crate::core::transport::{
-    DynStream, Protocol, QuicSession, YamuxClient, boxed_stream, client_enable_tls, dial_kcp,
-    dial_websocket, new_client_tls_config,
+    DynStream, Protocol, QuicSession, YamuxClient, boxed_stream, client_enable_tls,
+    client_websocket_upgrade, dial_kcp, new_client_tls_config,
 };
 use anyhow::Result;
 use async_trait::async_trait;
 use rustls::ClientConfig as RustlsClientConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::net::TcpStream;
 
 #[async_trait]
 pub trait Connector: Send + Sync {
@@ -68,25 +67,39 @@ pub async fn build_connector(cfg: &ClientConfig) -> Result<Arc<dyn Connector>> {
                 }))
             }
         }
-        Protocol::Websocket => {
+        protocol @ (Protocol::Websocket | Protocol::Wss) => {
+            let edge_tls = if protocol == Protocol::Wss {
+                let host = cfg.server_host()?;
+                Some((
+                    host.trim_matches(['[', ']']).to_owned(),
+                    new_client_tls_config("", "", &cfg.transport.ws_trusted_ca_file)?,
+                ))
+            } else {
+                None
+            };
+            let connector = WebsocketConnector {
+                endpoint: cfg.server_endpoint(),
+                port: cfg.server_port()?,
+                ws_path: cfg.transport.ws_path.clone(),
+                edge_tls,
+                access: cfg.transport.cloudflare_access.clone(),
+                header_env: cfg.transport.ws_header_env.clone(),
+                tls,
+                keepalive,
+            };
             if cfg.transport.tcp_mux {
-                let stream = dial_ws_tls(cfg, &tls, keepalive).await?;
+                let stream = connector.open().await?;
                 tracing::info!(
                     endpoint = %cfg.server_endpoint(),
-                    tls = tls.enable,
+                    protocol = protocol.as_str(),
+                    tls = connector.tls.enable,
                     "tcpMux: physical WebSocket opened, yamux client started"
                 );
                 Ok(Arc::new(YamuxConnector {
                     yamux: YamuxClient::start(stream),
                 }))
             } else {
-                Ok(Arc::new(WebsocketConnector {
-                    endpoint: cfg.server_endpoint(),
-                    port: cfg.server_port()?,
-                    ws_path: cfg.transport.ws_path.clone(),
-                    tls,
-                    keepalive,
-                }))
+                Ok(Arc::new(connector))
             }
         }
         Protocol::Kcp => {
@@ -132,26 +145,9 @@ async fn dial_tcp_tls(
     tls: &TlsDialOpts,
     keepalive: TcpKeepaliveConfig,
 ) -> Result<DynStream> {
-    let addr = resolve_addr(cfg).await?;
-    let stream = TcpStream::connect(addr).await?;
-    crate::core::net::tune_tcp_stream(&stream, keepalive);
+    let stream = connect_tcp_endpoint(&cfg.server, cfg.server_port()?).await?;
+    tune_tcp_stream(&stream, keepalive);
     tls.maybe_wrap(boxed_stream(stream)).await
-}
-
-async fn dial_ws_tls(
-    cfg: &ClientConfig,
-    tls: &TlsDialOpts,
-    keepalive: TcpKeepaliveConfig,
-) -> Result<DynStream> {
-    let addr = resolve_addr(cfg).await?;
-    let stream = dial_websocket(
-        addr,
-        &cfg.server_endpoint(),
-        &cfg.transport.ws_path,
-        keepalive,
-    )
-    .await?;
-    tls.maybe_wrap(stream).await
 }
 
 async fn dial_kcp_tls(addr: SocketAddr, tls: &TlsDialOpts) -> Result<DynStream> {
@@ -189,9 +185,8 @@ struct TcpConnector {
 #[async_trait]
 impl Connector for TcpConnector {
     async fn open(&self) -> Result<DynStream> {
-        let addr = crate::core::net::resolve_endpoint(&self.endpoint, self.port).await?;
-        let stream = TcpStream::connect(addr).await?;
-        crate::core::net::tune_tcp_stream(&stream, self.keepalive);
+        let stream = connect_tcp_endpoint(&self.endpoint, self.port).await?;
+        tune_tcp_stream(&stream, self.keepalive);
         self.tls.maybe_wrap(boxed_stream(stream)).await
     }
 }
@@ -200,6 +195,9 @@ struct WebsocketConnector {
     endpoint: String,
     port: u16,
     ws_path: String,
+    edge_tls: Option<(String, Arc<RustlsClientConfig>)>,
+    access: Option<CloudflareAccess>,
+    header_env: std::collections::BTreeMap<String, String>,
     tls: TlsDialOpts,
     keepalive: TcpKeepaliveConfig,
 }
@@ -207,8 +205,24 @@ struct WebsocketConnector {
 #[async_trait]
 impl Connector for WebsocketConnector {
     async fn open(&self) -> Result<DynStream> {
-        let addr = crate::core::net::resolve_endpoint(&self.endpoint, self.port).await?;
-        let stream = dial_websocket(addr, &self.endpoint, &self.ws_path, self.keepalive).await?;
+        let socket = connect_tcp_endpoint(&self.endpoint, self.port).await?;
+        tune_tcp_stream(&socket, self.keepalive);
+        let socket = boxed_stream(socket);
+        let stream = if let Some((host, config)) = &self.edge_tls {
+            let edge = client_enable_tls(socket, config.clone(), host)
+                .await
+                .map_err(|e| e.context("WSS edge handshake"))?;
+            client_websocket_upgrade(
+                edge,
+                &self.endpoint,
+                &self.ws_path,
+                self.access.as_ref(),
+                Some(&self.header_env),
+            )
+            .await?
+        } else {
+            client_websocket_upgrade(socket, &self.endpoint, &self.ws_path, None, None).await?
+        };
         self.tls.maybe_wrap(stream).await
     }
 }

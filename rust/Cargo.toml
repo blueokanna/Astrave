@@ -1,6 +1,6 @@
 [package]
 name = "astrave"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
@@ -31,6 +31,7 @@ required-features = ["docs"]
 default = ["cli"]
 cli = ["runtime", "dep:clap", "dep:uuid"]
 runtime = [
+    "dep:libc",
     "dep:async-trait",
     "dep:fast-socks5",
     "dep:hostname",
@@ -75,7 +76,6 @@ app = [
     "dep:flutter_rust_bridge",
     "dep:instant-acme",
     "dep:jni",
-    "dep:libc",
     "dep:percent-encoding",
     "dep:serde_json",
     "dep:tempfile",

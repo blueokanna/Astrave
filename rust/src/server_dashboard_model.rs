@@ -37,8 +37,16 @@ pub struct Page<T: NsonSerialize> {
 #[njson(rename_all = "camelCase")]
 pub struct SystemInfo {
     pub version: String,
+    pub process: ProcessInfo,
     pub config: SystemConfig,
     pub status: SystemStatus,
+}
+
+#[derive(NsonSerialize)]
+#[njson(rename_all = "camelCase")]
+pub struct ProcessInfo {
+    pub resident_bytes: Option<u64>,
+    pub cpu_percent: f64,
 }
 
 #[derive(NsonSerialize)]

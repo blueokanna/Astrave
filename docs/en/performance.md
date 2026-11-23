@@ -5,6 +5,21 @@ sidebar_label: Performance
 
 # Measuring resource use
 
+## Standalone process memory
+
+On 23 November 2026, the Windows x64 release ran one TCP tunnel on loopback with token authentication, mTLS and multiplexing. Each trial sampled the working set 20 times per state at 100 ms intervals. The table reports the median of the three per-trial medians. The idle connected state followed one verified echo. Under load, eight connections repeatedly verified 64 KiB echoes, exchanging 4.64 GiB of duplex traffic across the three trials.
+
+| State | Rust client | Rust gateway |
+| --- | ---: | ---: |
+| Disconnected (client retrying, gateway listening separately) | 8.56 MiB | 6.66 MiB |
+| Connected and idle | 9.05 MiB | 7.76 MiB |
+| Eight active streams | 11.43 MiB | 10.59 MiB |
+| Highest sample during forwarding | 11.71 MiB | 10.86 MiB |
+
+The gateway overview and authenticated `/api/v1/system/info` show gateway CPU and resident memory. `data.process.residentBytes` is measured in bytes and is `null` when unavailable. The Flutter overview measures the entire application process including the UI, Flutter engine and embedded Rust runtime. Reproduce standalone measurements with `uv run --with psutil scripts/measure-memory.py target/release`. [Raw working set samples](https://github.com/blueokanna/Astrave/blob/main/docs/benchmarks/mtls-memory-windows.jsonl)
+
+A separate Windows desktop release process displayed the overview with the tunnel stopped. Twenty working set samples starting seven seconds after the window appeared had a median of **144.50 MiB**. The overview itself samples about every five seconds, so the displayed reading can reflect a different point in the rendering and background work cycle.
+
 ## Windows loopback measurements for the TCP buffer change
 
 The two local Release builds were measured on 20 November 2026 on Windows 10 x64, Intel Core i7-11850H, using Rust 1.95.0 and Dart 3.13.7. Each build ran three times with 128 registered TCP tunnels, one client, TCP multiplexing enabled, TLS disabled and 64 warmed connections to one tunnel. Eight sockets each sent and verified 512 echoes of 64 KiB per round, for 512 MiB in both directions combined. Memory was sampled once per process after all sockets had carried data, before the timed transfer. The sample excludes the echo server, benchmark driver and Flutter UI.

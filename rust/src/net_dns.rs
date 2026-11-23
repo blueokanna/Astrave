@@ -105,6 +105,10 @@ fn registry_servers() -> Vec<IpAddr> {
 /// Literal IPv4/IPv6 addresses and `localhost` never touch the network.
 pub async fn resolve_host(host: &str) -> Result<Vec<IpAddr>> {
     let host = host.trim().trim_end_matches('.');
+    let host = host
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(host);
     if host.is_empty() {
         bail!("empty host name");
     }
@@ -207,6 +211,55 @@ pub async fn resolve_endpoint(endpoint: &str, default_port: u16) -> Result<Socke
     resolve_socket_addr(&host, port).await
 }
 
+/// Keep the original hostname for TLS. Stagger TCP attempts across both
+/// address families so a stale record cannot consume the handshake deadline.
+pub(crate) async fn connect_tcp_endpoint(
+    endpoint: &str,
+    default_port: u16,
+) -> Result<tokio::net::TcpStream> {
+    let (host, port) = split_host_port(endpoint, default_port)?;
+    let addresses = resolve_host(&host).await?;
+    let mut v4 = addresses.iter().filter(|ip| ip.is_ipv4());
+    let mut v6 = addresses.iter().filter(|ip| ip.is_ipv6());
+    let mut ordered = Vec::with_capacity(addresses.len());
+    while ordered.len() < addresses.len() {
+        ordered.extend(
+            v4.next()
+                .into_iter()
+                .chain(v6.next())
+                .map(|&ip| SocketAddr::new(ip, port)),
+        );
+    }
+    let mut candidates = ordered.into_iter();
+    let first = candidates.next().context("no TCP addresses")?;
+    if candidates.len() == 0 {
+        return Ok(tokio::net::TcpStream::connect(first).await?);
+    }
+    let mut attempts = tokio::task::JoinSet::new();
+    let mut next = Some(first);
+    loop {
+        if let Some(addr) = next.take() {
+            attempts.spawn(async move {
+                timeout(Duration::from_secs(4), tokio::net::TcpStream::connect(addr))
+                    .await
+                    .map_err(std::io::Error::from)
+                    .and_then(|result| result)
+            });
+        }
+        tokio::select! {
+            result = attempts.join_next() => {
+                let attempt = result.context("no pending TCP attempts")??;
+                match attempt {
+                    Ok(stream) => return Ok(stream),
+                    Err(error) if candidates.len() == 0 && attempts.is_empty() => return Err(error.into()),
+                    Err(_) => next = candidates.next(),
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(250)), if candidates.len() > 0 && attempts.len() < 2 => next = candidates.next(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,6 +292,17 @@ mod tests {
             resolve_host("localhost").await.unwrap()[0],
             IpAddr::from([127, 0, 0, 1])
         );
+    }
+
+    #[tokio::test]
+    async fn tcp_tries_ipv6_after_the_first_localhost_address_fails() {
+        let Ok(listener) = tokio::net::TcpListener::bind("[::1]:0").await else {
+            return;
+        };
+        let socket = connect_tcp_endpoint("localhost", listener.local_addr().unwrap().port())
+            .await
+            .unwrap();
+        assert!(socket.peer_addr().unwrap().is_ipv6());
     }
 
     /// Network-dependent: `cargo test --lib resolves_a_public_name -- --ignored`.

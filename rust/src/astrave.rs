@@ -3,6 +3,7 @@ use astrave_desktop::client::{ClientConfig, ClientHandle, StartOptions, local_co
 use astrave_desktop::core::logging;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+mod cloud_cert;
 mod peer;
 
 #[derive(Parser, Debug)]
@@ -26,6 +27,14 @@ struct Cli {
 enum Command {
     Reload,
     Verify,
+    /// Inspect a DNS provider or issue/renew a gateway certificate with lego.
+    CloudCert {
+        #[arg(value_enum)]
+        action: cloud_cert::Action,
+        /// Location of the lego executable (defaults to lego on PATH).
+        #[arg(long, default_value = "lego")]
+        lego: PathBuf,
+    },
     /// Bridge a local TCP service over a mutually authenticated direct QUIC link.
     Peer,
     /// Introduce a configured pair of peers using their observed UDP addresses.
@@ -48,6 +57,7 @@ async fn main() -> Result<()> {
         None => run(config_path).await,
         Some(Command::Reload) => reload(config_path).await,
         Some(Command::Verify) => verify(config_path),
+        Some(Command::CloudCert { action, lego }) => cloud_cert::run(&config_path, action, &lego),
         Some(Command::Peer | Command::Rendezvous) => unreachable!(),
     }
 }

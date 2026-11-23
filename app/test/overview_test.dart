@@ -41,6 +41,26 @@ void main() {
       expect(find.text('TLS'), findsOneWidget);
       expect(find.text('QUIC'), findsNWidgets(2));
       expect(find.text('Disconnected'), findsOneWidget);
+      session.usage.value = const ProcessUsage(
+        cpuPercent: 2.5,
+        memoryMib: 14.75,
+      );
+      await tester.pump();
+      expect(find.textContaining('14.8 MiB'), findsOneWidget);
+      expect(find.textContaining('2.5%'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await tester.pumpAndSettle();
+      final memoryLabel = find.textContaining('14.8 MiB');
+      await tester.ensureVisible(memoryLabel);
+      await tester.pumpAndSettle();
+      final bounds = tester.getRect(memoryLabel);
+      final viewport = tester.getRect(find.byType(CustomScrollView));
+      expect(bounds.left, greaterThanOrEqualTo(viewport.left));
+      expect(bounds.right, lessThanOrEqualTo(viewport.right));
+      expect(bounds.top, greaterThanOrEqualTo(viewport.top));
+      expect(bounds.bottom, lessThanOrEqualTo(viewport.bottom));
       expect(tester.takeException(), isNull);
     },
   );

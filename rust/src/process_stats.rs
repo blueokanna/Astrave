@@ -12,6 +12,12 @@ pub struct ProcessMeter {
     last_sample: ProcessSample,
 }
 
+impl Default for ProcessMeter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProcessMeter {
     pub fn new() -> Self {
         Self {
@@ -27,14 +33,14 @@ impl ProcessMeter {
     pub fn sample(&mut self) -> ProcessSample {
         let now = Instant::now();
         let wall = now.duration_since(self.last_wall).as_secs_f64();
+        // Readers share this window. Repeated requests must not reset the CPU
+        // baseline or perform a syscall for each dashboard request.
+        if wall < 1.0 {
+            return self.last_sample;
+        }
         let cpu_now = cpu_seconds();
-
-        let cpu_percent = if wall > 0.05 {
-            let delta = (cpu_now - self.last_cpu_secs).max(0.0);
-            ((delta / wall) * 100.0).clamp(0.0, 100.0 * f64::from(num_cpus_f32())) as f32
-        } else {
-            self.last_sample.cpu_percent
-        };
+        let delta = (cpu_now - self.last_cpu_secs).max(0.0);
+        let cpu_percent = (delta / wall * 100.0) as f32;
 
         self.last_cpu_secs = cpu_now;
         self.last_wall = now;
@@ -44,13 +50,6 @@ impl ProcessMeter {
         };
         self.last_sample
     }
-}
-
-fn num_cpus_f32() -> f32 {
-    std::thread::available_parallelism()
-        .map(|n| n.get() as f32)
-        .unwrap_or(1.0)
-        .max(1.0)
 }
 
 #[cfg(unix)]
@@ -106,7 +105,7 @@ fn memory_bytes() -> u64 {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn page_size() -> u64 {
-    unsafe { libc::sysconf(libc::_SC_PAGESIZE) as u64 }
+    u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).unwrap_or_default()
 }
 
 #[cfg(windows)]

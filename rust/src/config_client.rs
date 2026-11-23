@@ -96,6 +96,16 @@ pub struct TransportConfig {
     #[serde(default = "default_ws_path", rename = "wsPath", alias = "ws_path")]
     pub ws_path: String,
 
+    #[serde(default, rename = "wsTrustedCaFile", alias = "ws_trusted_ca_file")]
+    pub ws_trusted_ca_file: String,
+
+    #[serde(default, rename = "cloudflareAccess", alias = "cloudflare_access")]
+    pub cloudflare_access: Option<CloudflareAccess>,
+
+    /// WSS edge authentication headers mapped to process environment variables.
+    #[serde(default, rename = "wsHeaderEnv")]
+    pub ws_header_env: std::collections::BTreeMap<String, String>,
+
     #[serde(default)]
     pub tls: ClientTlsConfig,
 }
@@ -113,17 +123,79 @@ impl Default for TransportConfig {
             heartbeat_timeout: default_heartbeat_timeout(),
             quic: QuicConfig::default(),
             ws_path: default_ws_path(),
+            ws_trusted_ca_file: String::new(),
+            cloudflare_access: None,
+            ws_header_env: Default::default(),
             tls: ClientTlsConfig::default(),
         }
     }
 }
 
 impl TransportConfig {
+    fn validate_ws_headers(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.ws_header_env.len() <= 8,
+            "too many wsHeaderEnv entries"
+        );
+        let mut names = std::collections::HashSet::new();
+        for (name, var) in &self.ws_header_env {
+            let lower = name.to_ascii_lowercase();
+            anyhow::ensure!(
+                matches!(
+                    lower.as_str(),
+                    "authorization" | "api-key" | "ocp-apim-subscription-key"
+                ) || lower.starts_with("x-"),
+                "wsHeaderEnv requires an authentication header"
+            );
+            anyhow::ensure!(
+                name.len() <= 64
+                    && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                    && names.insert(lower),
+                "invalid or duplicate wsHeaderEnv header"
+            );
+            anyhow::ensure!(
+                !var.is_empty() && var.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'),
+                "invalid wsHeaderEnv variable name"
+            );
+        }
+        Ok(())
+    }
+
     pub fn tcp_keepalive(&self) -> crate::core::net::TcpKeepaliveConfig {
         crate::core::net::TcpKeepaliveConfig::new(
             self.tcp_keepalive_idle,
             self.tcp_keepalive_interval,
         )
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CloudflareAccess {
+    #[serde(rename = "clientId")]
+    pub client_id: String,
+    #[serde(rename = "clientSecret")]
+    pub client_secret: String,
+}
+
+impl std::fmt::Debug for CloudflareAccess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CloudflareAccess").finish_non_exhaustive()
+    }
+}
+
+impl CloudflareAccess {
+    pub(crate) fn validate(&self) -> anyhow::Result<()> {
+        for value in [&self.client_id, &self.client_secret] {
+            if value.is_empty()
+                || value.len() > 1024
+                || !value.bytes().all(|b| b.is_ascii_graphic())
+            {
+                return Err(anyhow!(
+                    "cloudflareAccess requires a valid clientId and clientSecret"
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -359,6 +431,8 @@ impl ClientConfig {
     }
 
     fn resolve_paths(&mut self, base: &Path) {
+        self.transport.ws_trusted_ca_file =
+            super::resolve_maybe_relative(base, &self.transport.ws_trusted_ca_file);
         let tls = &mut self.transport.tls;
         tls.cert_file = super::resolve_maybe_relative(base, &tls.cert_file);
         tls.key_file = super::resolve_maybe_relative(base, &tls.key_file);
@@ -400,10 +474,13 @@ impl ClientConfig {
         if self.transport.tls.server_name.trim().is_empty()
             && let Ok(host) = self.server_host()
         {
-            self.transport.tls.server_name = host;
+            self.transport.tls.server_name = host.trim_matches(['[', ']']).to_owned();
         }
 
         self.transport.ws_path = crate::core::transport::normalize_ws_path(&self.transport.ws_path);
+        for tunnel in &mut self.tunnels {
+            tunnel.protocol = tunnel.protocol.trim().to_ascii_lowercase();
+        }
         self.log.complete();
     }
 
@@ -412,7 +489,8 @@ impl ClientConfig {
         if self.server.trim().is_empty() {
             return Err(anyhow!("server is required (host:port)"));
         }
-        let (host, port) = parse_host_port(&self.server, 9527)
+        let (host, port) = self
+            .server_address()
             .map_err(|e| anyhow!("invalid server {:?}: {e}", self.server))?;
         if host.is_empty() {
             return Err(anyhow!("server host is empty"));
@@ -420,7 +498,20 @@ impl ClientConfig {
         if port == 0 {
             return Err(anyhow!("server port must be > 0"));
         }
-        let _ = self.protocol()?;
+        let wss = self.protocol()? == crate::core::transport::Protocol::Wss;
+        if wss && !self.transport.tls.enable {
+            return Err(anyhow!(
+                "wss requires transport.tls.enable=true for the Astrave origin"
+            ));
+        }
+        if let Some(access) = &self.transport.cloudflare_access {
+            anyhow::ensure!(wss, "cloudflareAccess requires transport.protocol=wss");
+            access.validate()?;
+        }
+        if !self.transport.ws_header_env.is_empty() {
+            anyhow::ensure!(wss, "wsHeaderEnv requires transport.protocol=wss");
+            self.transport.validate_ws_headers()?;
+        }
         if self.transport.pool_count < 1 {
             return Err(anyhow!(
                 "transport.poolCount must be >= 1, got {}",
@@ -457,6 +548,15 @@ impl ClientConfig {
                     "tunnel `{}` unsupported protocol {:?}",
                     t.name,
                     t.protocol
+                ));
+            }
+            if t.requires_local_service() && t.service.trim().is_empty() {
+                return Err(anyhow!("tunnel `{}` requires a local service", t.name));
+            }
+            if t.has_plugin() && matches!(proto.as_str(), "udp" | "http") {
+                return Err(anyhow!(
+                    "tunnel `{}` cannot use a stream plugin with {proto}",
+                    t.name
                 ));
             }
             if !t.transport.bandwidth.is_finite() || t.transport.bandwidth < 0.0 {
@@ -569,12 +669,21 @@ impl ClientConfig {
         Ok(())
     }
 
+    fn server_address(&self) -> anyhow::Result<(String, u16)> {
+        let port = if self.protocol()? == crate::core::transport::Protocol::Wss {
+            443
+        } else {
+            9527
+        };
+        parse_host_port(&self.server, port)
+    }
+
     pub fn server_host(&self) -> anyhow::Result<String> {
-        Ok(parse_host_port(&self.server, 9527)?.0)
+        Ok(self.server_address()?.0)
     }
 
     pub fn server_port(&self) -> anyhow::Result<u16> {
-        Ok(parse_host_port(&self.server, 9527)?.1)
+        Ok(self.server_address()?.1)
     }
 
     pub fn tls_server_name(&self) -> String {
@@ -593,7 +702,7 @@ impl ClientConfig {
     pub fn protocol(&self) -> anyhow::Result<crate::core::transport::Protocol> {
         crate::core::transport::Protocol::parse(&self.transport.protocol).ok_or_else(|| {
             anyhow::anyhow!(
-                "unsupported transport.protocol {:?}, use tcp|quic|websocket|kcp",
+                "unsupported transport.protocol {:?}, use tcp|quic|websocket|wss|kcp",
                 self.transport.protocol
             )
         })
@@ -606,6 +715,7 @@ impl ClientConfig {
                 Some(
                     crate::core::transport::Protocol::Tcp
                         | crate::core::transport::Protocol::Websocket
+                        | crate::core::transport::Protocol::Wss
                         | crate::core::transport::Protocol::Kcp
                 )
             )

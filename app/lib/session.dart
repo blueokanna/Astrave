@@ -37,6 +37,8 @@ class Session extends ChangeNotifier {
   Map<String, String> remotes = {};
   String? error;
   final logs = SessionLog();
+  final usage = ValueNotifier<rust.ProcessUsage?>(null);
+  final _sampleAge = Stopwatch();
   Timer? _timer;
   Future<void>? _inFlight;
   bool _disposed = false;
@@ -98,10 +100,23 @@ class Session extends ChangeNotifier {
       error = next.error;
       logs.append(next.lines);
       if (changed) notifyListeners();
+      if (_pollingEnabled &&
+          (!_sampleAge.isRunning ||
+              _sampleAge.elapsed >= const Duration(seconds: 5))) {
+        _sampleAge
+          ..reset()
+          ..start();
+        try {
+          final sample = await rust.processUsage();
+          if (!_disposed) usage.value = sample;
+        } catch (_) {
+          if (!_disposed) usage.value = null;
+        }
+      }
     } finally {
       _timer?.cancel();
-      if (active && _pollingEnabled && !_disposed) {
-        _timer = Timer(const Duration(seconds: 1), _poll);
+      if (_pollingEnabled && !_disposed) {
+        _timer = Timer(Duration(seconds: active ? 1 : 5), _poll);
       }
     }
   }
@@ -127,6 +142,7 @@ class Session extends ChangeNotifier {
     _disposed = true;
     _timer?.cancel();
     logs.dispose();
+    usage.dispose();
     super.dispose();
   }
 }

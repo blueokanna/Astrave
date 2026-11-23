@@ -8,7 +8,7 @@ mod log;
 mod server;
 
 pub use client::{
-    ClientConfig, ClientTlsConfig, PluginConfig, TransportConfig, TunnelConfig,
+    ClientConfig, ClientTlsConfig, CloudflareAccess, PluginConfig, TransportConfig, TunnelConfig,
     TunnelTransportConfig,
 };
 pub use env::{contains_env_placeholders, expand_env_placeholders};
@@ -102,6 +102,63 @@ pub(crate) fn resolve_maybe_relative(base: &Path, p: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wss_uses_https_port_and_requires_origin_tls() {
+        let mut cfg: ClientConfig = parse_config_toml("server='edge.example'\ntransport.protocol='WSS'\ntransport.tls.serverName='origin.example'", Path::new("agent.toml")).unwrap();
+        cfg.complete();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.server_port().unwrap(), 443);
+        assert_eq!(cfg.tls_server_name(), "origin.example");
+        assert!(cfg.uses_yamux());
+        cfg.transport.tls.enable = false;
+        assert!(cfg.validate().is_err());
+        cfg.transport.protocol = "ws".into();
+        cfg.validate().unwrap();
+        assert_eq!(cfg.server_port().unwrap(), 9527);
+    }
+
+    #[test]
+    fn access_tokens_require_wss_and_valid_header_values() {
+        let source = "server='edge.example'\ntransport.protocol='wss'\n[transport.cloudflareAccess]\nclientId='service.access'\nclientSecret='private-test-value'";
+        let mut cfg: ClientConfig = parse_config_toml(source, Path::new("agent.toml")).unwrap();
+        cfg.validate().unwrap();
+        assert!(!format!("{cfg:?}").contains("private-test-value"));
+        cfg.transport.protocol = "websocket".into();
+        assert!(cfg.validate().is_err());
+        cfg.transport.protocol = "wss".into();
+        cfg.transport
+            .cloudflare_access
+            .as_mut()
+            .unwrap()
+            .client_secret
+            .push('\n');
+        let error = cfg.validate().unwrap_err().to_string();
+        assert!(error.contains("cloudflareAccess") && !error.contains("private-test-value"));
+    }
+
+    #[test]
+    fn edge_header_config_rejects_plaintext_reserved_and_duplicate_names() {
+        let mut cfg: ClientConfig = parse_config_toml("server='[::1]'\ntransport.protocol='wss'\ntransport.wsHeaderEnv.Authorization='EDGE_BEARER'", Path::new("agent.toml")).unwrap();
+        cfg.complete();
+        assert_eq!(cfg.tls_server_name(), "::1");
+        cfg.validate().unwrap();
+        cfg.transport.protocol = "ws".into();
+        assert!(cfg.validate().is_err());
+        cfg.transport.protocol = "wss".into();
+        for name in [
+            "Host",
+            "Sec-WebSocket-Key",
+            "X-Invalid Header",
+            "authorization",
+        ] {
+            cfg.transport
+                .ws_header_env
+                .insert(name.into(), "OTHER".into());
+            assert!(cfg.validate().is_err());
+            cfg.transport.ws_header_env.remove(name);
+        }
+    }
 
     #[test]
     fn config_parse_errors_report_location_without_source_values() {
