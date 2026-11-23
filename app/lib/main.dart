@@ -235,9 +235,10 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
       if (!mounted) return;
       session?.dispose();
       final next = Session(profile);
-      if (Platform.isAndroid &&
-          WidgetsBinding.instance.lifecycleState == AppLifecycleState.paused) {
-        next.setPollingEnabled(false);
+      if (Platform.isAndroid) {
+        next.setPollingEnabled(
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
+        );
       }
       editor.text = profile.source;
       setState(() {
