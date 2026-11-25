@@ -1,7 +1,7 @@
 name: astrave_desktop
 description: Flutter client for Astrave on Android, Windows, Linux and macOS.
 publish_to: none
-version: 1.0.1+3
+version: 1.0.2+3
 
 environment:
   sdk: ^3.13.0

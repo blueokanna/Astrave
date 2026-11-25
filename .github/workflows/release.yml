@@ -29,15 +29,18 @@ jobs:
         id: ver
         run: |
           set -euo pipefail
-          CARGO_V=$(python -c 'import tomllib; print(tomllib.load(open("rust/Cargo.toml", "rb"))["package"]["version"])')
-          V="$CARGO_V"
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            [[ "$GITHUB_REF_NAME" == v* ]]
-            V="${GITHUB_REF_NAME#v}"
+          V=$(python -c 'import tomllib; print(tomllib.load(open("rust/Cargo.toml", "rb"))["package"]["version"])')
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$V" ]]; then
+            echo "::error file=rust/Cargo.toml::Release tag $GITHUB_REF_NAME must match v$V."
+            exit 1
           fi
           APP_V=$(sed -nE 's/^version:[[:space:]]*([^[:space:]#]+).*/\1/p' app/pubspec.yaml)
-          if [[ "$CARGO_V" != "$V" || "${APP_V%%+*}" != "$V" || ( "$APP_V" == *+* && ! "${APP_V#*+}" =~ ^[0-9]+$ ) ]]; then
-            echo "Version mismatch between $GITHUB_REF_NAME, Cargo $CARGO_V and Flutter $APP_V" >&2
+          if [[ "${APP_V%%+*}" != "$V" ]]; then
+            echo "::error file=app/pubspec.yaml::Flutter version '$APP_V' must match Cargo version '$V' before the optional +build suffix."
+            exit 1
+          fi
+          if [[ "$APP_V" == *+* && ! "${APP_V#*+}" =~ ^[0-9]+$ ]]; then
+            echo "::error file=app/pubspec.yaml::Flutter build number in '$APP_V' must contain only digits after '+'."
             exit 1
           fi
           build=true
