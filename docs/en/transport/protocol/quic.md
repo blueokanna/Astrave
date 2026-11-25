@@ -38,7 +38,7 @@ maxIdleTimeout = 30
 maxIncomingStreams = 100000
 ```
 
-`server` must point at the server `quicPort`.
+Set `server` to the gateway's `quicPort`. Enclose a literal IPv6 address in brackets, for example `server = "[2001:db8::1]:9528"`. If a hostname has both IPv4 and IPv6 records, the client tries IPv4 first. After a failed handshake it tries the next address on reconnect, keeping the configured TLS server name for certificate verification.
 
 ## Client parameters
 

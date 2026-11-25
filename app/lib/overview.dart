@@ -25,7 +25,19 @@ class Overview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tunnels = session.profile.tunnels;
+    final cloudflare = session.profile.transport.startsWith('cloudflare/');
+    final tunnels = cloudflare
+        ? session.remotes.entries
+              .map(
+                (e) => Tunnel(
+                  name: e.key,
+                  protocol: 'https',
+                  service: 'Cloudflare Tunnel',
+                  publicEndpoint: e.value,
+                ),
+              )
+              .toList()
+        : session.profile.tunnels;
     final theme = Theme.of(context);
     return LayoutBuilder(
       builder: (context, box) {
@@ -112,17 +124,18 @@ class Overview extends StatelessWidget {
                       children: [
                         Expanded(
                           child: Text(
-                            '${text('Configured tunnels', '已配置隧道')}  ·  ${tunnels.length}',
+                            '${cloudflare ? text('Cloudflare routes', 'Cloudflare 路由') : text('Configured tunnels', '已配置隧道')}  ·  ${tunnels.length}',
                             style: theme.textTheme.titleLarge,
                           ),
                         ),
-                        IconButton.filledTonal(
-                          tooltip: text('Add tunnel', '添加隧道'),
-                          onPressed: session.busy || modify == null
-                              ? null
-                              : () => modify!(null),
-                          icon: const Icon(Icons.add_rounded),
-                        ),
+                        if (!cloudflare)
+                          IconButton.filledTonal(
+                            tooltip: text('Add tunnel', '添加隧道'),
+                            onPressed: session.busy || modify == null
+                                ? null
+                                : () => modify!(null),
+                            icon: const Icon(Icons.add_rounded),
+                          ),
                       ],
                     ),
                   ],
@@ -141,7 +154,14 @@ class Overview extends StatelessWidget {
                       child: Card.outlined(
                         child: ListTile(
                           leading: const Icon(Icons.route_outlined),
-                          title: Text(text('No tunnels configured', '尚未配置隧道')),
+                          title: Text(
+                            cloudflare
+                                ? text(
+                                    'Routes are loaded from your Cloudflare dashboard after connecting.',
+                                    '连接后从 Cloudflare 控制台加载路由。',
+                                  )
+                                : text('No tunnels configured', '尚未配置隧道'),
+                          ),
                         ),
                       ),
                     )
@@ -160,7 +180,7 @@ class Overview extends StatelessWidget {
                           last: index == tunnels.length - 1,
                           assigned: assigned,
                           text: text,
-                          edit: session.busy || modify == null
+                          edit: cloudflare || session.busy || modify == null
                               ? null
                               : (remove) => modify!(index, remove: remove),
                         );
@@ -223,7 +243,9 @@ class _ConnectionCard extends StatelessWidget {
       (
         Icons.call_split_rounded,
         t('Multiplexing', '多路复用'),
-        p.transport == 'quic'
+        p.transport.startsWith('cloudflare/')
+            ? 'HTTP/2 · QUIC'
+            : p.transport == 'quic'
             ? 'QUIC'
             : p.multiplex
             ? 'yamux'

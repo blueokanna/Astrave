@@ -135,6 +135,17 @@ fn parse_profile(path: &Path, source: String) -> Result<Profile> {
     let mut config: ClientConfig = crate::core::config::parse_config_toml(&expanded, path)?;
     config.prepare_runtime(path);
     config.validate()?;
+    if let Some(cf) = &config.cloudflare {
+        return Ok(Profile {
+            path: path.display().to_string(),
+            source,
+            server: format!("Cloudflare · {}", cf.credentials()?.tunnel_identifier),
+            transport: format!("cloudflare/{}", cf.protocol),
+            tls: true,
+            multiplex: true,
+            tunnels: Vec::new(),
+        });
+    }
     let tunnels = config
         .tunnels
         .into_iter()
@@ -230,6 +241,7 @@ pub fn edit_tunnel(source: String, index: Option<u32>, fragment: Option<String>)
 pub fn reset_connection_settings(source: String) -> Result<String> {
     let mut doc = parse_document(&source)?;
     for key in [
+        "cloudflare",
         "transport",
         "auth",
         "user",

@@ -1,6 +1,7 @@
 //! Shared DNS cache and bounded recursive lookups with a system resolver fallback.
 
 use anyhow::{Context, Result, anyhow, bail};
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use recurse_x::{Name, Resolver, ResolverConfig};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
@@ -218,44 +219,62 @@ pub(crate) async fn connect_tcp_endpoint(
     default_port: u16,
 ) -> Result<tokio::net::TcpStream> {
     let (host, port) = split_host_port(endpoint, default_port)?;
-    let addresses = resolve_host(&host).await?;
-    let mut v4 = addresses.iter().filter(|ip| ip.is_ipv4());
-    let mut v6 = addresses.iter().filter(|ip| ip.is_ipv6());
-    let mut ordered = Vec::with_capacity(addresses.len());
-    while ordered.len() < addresses.len() {
-        ordered.extend(
-            v4.next()
-                .into_iter()
-                .chain(v6.next())
-                .map(|&ip| SocketAddr::new(ip, port)),
-        );
+    let addresses: Vec<_> = resolve_host(&host)
+        .await?
+        .into_iter()
+        .map(|ip| SocketAddr::new(ip, port))
+        .collect();
+    Ok(connect_tcp_addresses(&addresses, true).await?)
+}
+
+pub(crate) fn ordered_addresses(
+    addresses: &[SocketAddr],
+    prefer_v4: bool,
+) -> impl Iterator<Item = &SocketAddr> {
+    let mut preferred = addresses.iter().filter(move |a| a.is_ipv4() == prefer_v4);
+    let mut other = addresses.iter().filter(move |a| a.is_ipv4() != prefer_v4);
+    let mut alternate = false;
+    std::iter::from_fn(move || {
+        alternate = !alternate;
+        if alternate {
+            preferred.next().or_else(|| other.next())
+        } else {
+            other.next().or_else(|| preferred.next())
+        }
+    })
+}
+
+/// Stagger the two address families, keeping at most two sockets in flight.
+pub(crate) async fn connect_tcp_addresses(
+    addresses: &[SocketAddr],
+    prefer_v4: bool,
+) -> std::io::Result<tokio::net::TcpStream> {
+    use std::io::{Error, ErrorKind};
+    if let [address] = addresses {
+        return tokio::net::TcpStream::connect(address).await;
     }
-    let mut candidates = ordered.into_iter();
-    let first = candidates.next().context("no TCP addresses")?;
-    if candidates.len() == 0 {
-        return Ok(tokio::net::TcpStream::connect(first).await?);
-    }
-    let mut attempts = tokio::task::JoinSet::new();
-    let mut next = Some(first);
+    let mut candidates = ordered_addresses(addresses, prefer_v4).peekable();
+    let mut next = Some(
+        candidates
+            .next()
+            .ok_or_else(|| Error::new(ErrorKind::NotFound, "no TCP addresses"))?,
+    );
+    let mut attempts = FuturesUnordered::new();
     loop {
         if let Some(addr) = next.take() {
-            attempts.spawn(async move {
+            attempts.push(async move {
                 timeout(Duration::from_secs(4), tokio::net::TcpStream::connect(addr))
                     .await
-                    .map_err(std::io::Error::from)
-                    .and_then(|result| result)
+                    .map_err(Error::from)?
             });
         }
         tokio::select! {
-            result = attempts.join_next() => {
-                let attempt = result.context("no pending TCP attempts")??;
-                match attempt {
-                    Ok(stream) => return Ok(stream),
-                    Err(error) if candidates.len() == 0 && attempts.is_empty() => return Err(error.into()),
-                    Err(_) => next = candidates.next(),
-                }
-            }
-            _ = tokio::time::sleep(Duration::from_millis(250)), if candidates.len() > 0 && attempts.len() < 2 => next = candidates.next(),
+            Some(result) = attempts.next() => match result {
+                Ok(stream) => return Ok(stream),
+                Err(error) if candidates.peek().is_none() && attempts.is_empty() => return Err(error),
+                Err(_) => next = candidates.next(),
+            },
+            _ = tokio::time::sleep(Duration::from_millis(250)), if candidates.peek().is_some() && attempts.len() < 2 => next = candidates.next(),
         }
     }
 }
@@ -291,6 +310,26 @@ mod tests {
         assert_eq!(
             resolve_host("localhost").await.unwrap()[0],
             IpAddr::from([127, 0, 0, 1])
+        );
+    }
+
+    #[tokio::test]
+    async fn tcp_falls_back_past_two_unreachable_candidates() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let unavailable = SocketAddr::new(address.ip(), 0);
+        let socket = connect_tcp_addresses(&[unavailable, unavailable, address], true)
+            .await
+            .unwrap();
+        assert_eq!(socket.peer_addr().unwrap(), address);
+        assert!(
+            connect_tcp_addresses(&[unavailable, unavailable], false)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            connect_tcp_addresses(&[], false).await.unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
         );
     }
 

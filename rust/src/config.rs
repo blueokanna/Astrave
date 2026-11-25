@@ -119,6 +119,32 @@ mod tests {
     }
 
     #[test]
+    fn client_tls_rejects_incomplete_identities_and_invalid_names() {
+        let mut cfg: ClientConfig =
+            parse_config_toml("server='[::1]:9527'", Path::new("agent.toml")).unwrap();
+        cfg.validate().unwrap();
+        cfg.transport.tls.cert_file = "agent.pem".into();
+        assert!(cfg.validate().unwrap_err().to_string().contains("keyFile"));
+        cfg.transport.tls.key_file = "agent.key".into();
+        cfg.transport.tls.server_name = "https://gateway".into();
+        assert!(
+            cfg.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("serverName")
+        );
+        cfg.transport.tls.enable = false;
+        cfg.validate().unwrap();
+        cfg.transport.protocol = "quic".into();
+        assert!(
+            cfg.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("serverName")
+        );
+    }
+
+    #[test]
     fn access_tokens_require_wss_and_valid_header_values() {
         let source = "server='edge.example'\ntransport.protocol='wss'\n[transport.cloudflareAccess]\nclientId='service.access'\nclientSecret='private-test-value'";
         let mut cfg: ClientConfig = parse_config_toml(source, Path::new("agent.toml")).unwrap();

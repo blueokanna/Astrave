@@ -1,0 +1,15 @@
+# Run: astrave -c conf/cloudflare.toml
+# Use the connector token from your Cloudflare Tunnel installation page.
+# Manage published application routes in the Cloudflare dashboard.
+[cloudflare]
+token = "{{env.CLOUDFLARE_TUNNEL_TOKEN}}"
+# Alternatively remove token above and use a UTF-8 file containing only the token:
+# tokenFile = "cloudflare-token.txt"
+# Optional consistency check; the token already contains the Tunnel ID:
+# tunnelId = "00000000-0000-0000-0000-000000000000"
+protocol = "auto" # auto (QUIC with HTTP/2 fallback), quic, http2
+connections = 4
+# region = "us"
+
+[log]
+level = "info"

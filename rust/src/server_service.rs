@@ -18,7 +18,6 @@ use astrave_desktop::core::config::ServerConfig;
 use astrave_desktop::core::transport;
 use session_table::SessionMap;
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use tokio::net::TcpListener;
@@ -91,10 +90,7 @@ impl Service {
 
         let gw_shutdown = Arc::new(Notify::new());
         let mut set = JoinSet::new();
-        let listen_host = this
-            .cfg
-            .listen_host()
-            .map_err(|e| anyhow!("invalid listen: {e}"))?;
+        let control_addr = tcp_listener.local_addr()?;
         if let Some(ref gw) = this.http_gw {
             let bind = this.cfg.proxy_addr.clone();
             let port = this.cfg.http_gw_port;
@@ -118,9 +114,8 @@ impl Service {
         }
 
         if this.cfg.quic_enabled() {
-            let quic_addr: SocketAddr = format!("{}:{}", listen_host, this.cfg.quic_port)
-                .parse()
-                .map_err(|e| anyhow!("invalid quic bind addr: {e}"))?;
+            let mut quic_addr = control_addr;
+            quic_addr.set_port(this.cfg.quic_port);
             let endpoint = transport::build_server_endpoint(
                 quic_addr,
                 this.cfg.transport.quic.keepalive(),
@@ -136,9 +131,8 @@ impl Service {
         }
 
         if this.cfg.kcp_enabled() {
-            let kcp_addr: SocketAddr = format!("{}:{}", listen_host, this.cfg.kcp_port)
-                .parse()
-                .map_err(|e| anyhow!("invalid kcp bind addr: {e}"))?;
+            let mut kcp_addr = control_addr;
+            kcp_addr.set_port(this.cfg.kcp_port);
             let listener = transport::bind_kcp_listener(kcp_addr).await?;
             tracing::info!(
                 %kcp_addr,

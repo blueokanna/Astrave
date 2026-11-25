@@ -187,6 +187,9 @@ jobs:
       - name: Exercise direct peer streams after rendezvous shutdown
         run: python3 scripts/check-peer.py target/release/astrave
 
+      - name: Exercise pinned libp2p streams over TCP and QUIC
+        run: python3 scripts/check-libp2p.py target/release/astrave
+
   desktop:
     if: inputs.release_version == ''
     strategy:

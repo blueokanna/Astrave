@@ -87,6 +87,7 @@ impl Control {
     pub async fn open_session(
         cfg: Arc<RwLock<ClientConfig>>,
         previous_session_id: String,
+        address_attempt: usize,
         parent_cancel: CancellationToken,
         on_connected: impl FnOnce(),
         on_tunnel_remote: OnTunnelRemote,
@@ -95,7 +96,7 @@ impl Control {
         let cfg_snapshot = cfg.read().await.clone();
         let session_cancel = parent_cancel.child_token();
         let (connector, stream, resp) = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
-            let connector = build_connector(&cfg_snapshot).await?;
+            let connector = build_connector(&cfg_snapshot, address_attempt).await?;
             let mut stream = connector.open().await?;
             tracing::info!(
                 endpoint = %cfg_snapshot.server_endpoint(),

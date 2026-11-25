@@ -1,5 +1,5 @@
 use super::stream::{DynStream, boxed_stream};
-use super::tls::{self, client_crypto_from_tls_files, server_crypto_from_tls_files};
+use super::tls::{client_crypto_from_tls_files, server_crypto_from_tls_files};
 use anyhow::{Context, Result};
 use quinn::{
     ClientConfig, Connection, Endpoint, EndpointConfig, RecvStream, SendStream, ServerConfig,
@@ -98,7 +98,7 @@ impl QuicSession {
         tls_key: &str,
         tls_ca: &str,
     ) -> Result<Self> {
-        let endpoint = build_client_endpoint(
+        let config = client_config(
             keepalive,
             idle_timeout,
             Some(max_incoming_streams),
@@ -106,6 +106,12 @@ impl QuicSession {
             tls_key,
             tls_ca,
         )?;
+        let bind = if server_addr.is_ipv6() {
+            "[::]:0"
+        } else {
+            "0.0.0.0:0"
+        };
+        let endpoint = client_endpoint(bind, config)?;
         let conn = endpoint
             .connect(server_addr, server_name)
             .context("quic connect")?
@@ -199,7 +205,25 @@ pub fn build_client_endpoint(
     tls_key: &str,
     tls_ca: &str,
 ) -> Result<Endpoint> {
-    let _ = tls::install_ring_provider();
+    let config = client_config(
+        keepalive,
+        idle_timeout,
+        max_streams,
+        tls_cert,
+        tls_key,
+        tls_ca,
+    )?;
+    client_endpoint("0.0.0.0:0", config)
+}
+
+fn client_config(
+    keepalive: Duration,
+    idle_timeout: Duration,
+    max_streams: Option<u32>,
+    tls_cert: &str,
+    tls_key: &str,
+    tls_ca: &str,
+) -> Result<ClientConfig> {
     let crypto = client_crypto_from_tls_files(tls_cert, tls_key, tls_ca)?;
     let mut client = ClientConfig::new(Arc::new(crypto));
     client.transport_config(Arc::new(high_perf_transport(
@@ -208,7 +232,11 @@ pub fn build_client_endpoint(
         max_streams,
     )?));
 
-    let socket = UdpSocket::bind("0.0.0.0:0").context("bind quic client udp")?;
+    Ok(client)
+}
+
+fn client_endpoint(bind: &str, client: ClientConfig) -> Result<Endpoint> {
+    let socket = UdpSocket::bind(bind).context("bind quic client udp")?;
     tune_udp_buffers(&socket);
     let mut endpoint = Endpoint::new(EndpointConfig::default(), None, socket, runtime()?)
         .context("quic Endpoint::new client")?;

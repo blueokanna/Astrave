@@ -1,0 +1,2 @@
+# Standalone upstream test runs create these; Astrave uses the workspace lockfile.
+*/Cargo.lock

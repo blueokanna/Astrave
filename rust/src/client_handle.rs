@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{RwLock, mpsc, oneshot};
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
@@ -44,14 +44,34 @@ struct TunnelRemoteState {
 }
 
 struct Inner {
-    status: Mutex<ClientStatus>,
+    run: Mutex<Option<ActiveRun>>,
     last_error: Mutex<Option<String>>,
     pending_logs: Mutex<std::collections::VecDeque<String>>,
     tunnel_remotes: Mutex<TunnelRemoteState>,
-    cancel: Mutex<Option<CancellationToken>>,
-    join: Mutex<Option<JoinHandle<()>>>,
-    reload_tx: Mutex<Option<mpsc::Sender<ReloadRequest>>>,
     reload_lock: tokio::sync::Mutex<()>,
+}
+
+struct ActiveRun {
+    status: ClientStatus,
+    cloudflare: bool,
+    cancel: CancellationToken,
+    finished: CancellationToken,
+    abort: AbortHandle,
+    reload_tx: mpsc::Sender<ReloadRequest>,
+}
+
+// The service task owns cleanup even if it is aborted before its first poll.
+struct RunGuard(ClientHandle);
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        let mut slot = self.0.inner.run.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(run) = slot.take() {
+            run.cancel.cancel();
+            self.0.clear_tunnel_remotes();
+            run.finished.cancel();
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -69,20 +89,22 @@ impl ClientHandle {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Inner {
-                status: Mutex::new(ClientStatus::Stopped),
+                run: Mutex::new(None),
                 last_error: Mutex::new(None),
                 pending_logs: Mutex::default(),
                 tunnel_remotes: Mutex::new(TunnelRemoteState::default()),
-                cancel: Mutex::new(None),
-                join: Mutex::new(None),
-                reload_tx: Mutex::new(None),
                 reload_lock: tokio::sync::Mutex::new(()),
             }),
         }
     }
 
     pub fn status(&self) -> ClientStatus {
-        *self.inner.status.lock().unwrap_or_else(|e| e.into_inner())
+        self.inner
+            .run
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map_or(ClientStatus::Stopped, |run| run.status)
     }
 
     pub fn last_error(&self) -> Option<String> {
@@ -141,7 +163,7 @@ impl ClientHandle {
         g.generation = g.generation.wrapping_add(1);
     }
 
-    fn set_tunnel_remote(&self, name: String, remote_addr: String) {
+    pub(crate) fn set_tunnel_remote(&self, name: String, remote_addr: String) {
         if name.is_empty() {
             return;
         }
@@ -181,32 +203,19 @@ impl ClientHandle {
         }
     }
 
-    fn set_status(&self, s: ClientStatus) {
-        if let Ok(mut g) = self.inner.status.lock() {
-            *g = s;
+    pub(crate) fn set_status(&self, s: ClientStatus) {
+        let mut slot = self.inner.run.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(run) = slot.as_mut()
+            && run.status != ClientStatus::Stopping
+        {
+            run.status = s;
         }
     }
 
-    fn set_error(&self, e: Option<String>) {
+    pub(crate) fn set_error(&self, e: Option<String>) {
         if let Ok(mut g) = self.inner.last_error.lock() {
             *g = e;
         }
-    }
-
-    fn clear_reload_tx(&self) {
-        *self
-            .inner
-            .reload_tx
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = None;
-    }
-
-    fn set_reload_tx(&self, tx: mpsc::Sender<ReloadRequest>) {
-        *self
-            .inner
-            .reload_tx
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(tx);
     }
 
     pub async fn run_foreground(
@@ -215,46 +224,66 @@ impl ClientHandle {
         config_path: PathBuf,
         opts: StartOptions,
     ) -> Result<()> {
-        self.run_inner(cfg, config_path, opts, true).await
+        let join = self.spawn_service(cfg, config_path, opts, true)?;
+        tokio_util::task::AbortOnDropHandle::new(join).await?
     }
 
     pub fn start_with(
         &self,
-        mut cfg: ClientConfig,
+        cfg: ClientConfig,
         config_path: PathBuf,
         opts: StartOptions,
     ) -> Result<()> {
-        if self.status().is_active() {
-            bail!("client already running");
-        }
+        self.spawn_service(cfg, config_path, opts, false)?;
+        Ok(())
+    }
+
+    fn spawn_service(
+        &self,
+        mut cfg: ClientConfig,
+        config_path: PathBuf,
+        opts: StartOptions,
+        is_foreground: bool,
+    ) -> Result<JoinHandle<Result<()>>> {
         cfg.prepare_runtime(&config_path);
         cfg.validate()?;
-
+        let runtime = tokio::runtime::Handle::try_current()?;
+        let mut slot = self.inner.run.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.is_some() {
+            bail!("client already running");
+        }
         let cancel = CancellationToken::new();
-        *self.inner.cancel.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel.clone());
-        self.set_status(ClientStatus::Starting);
+        let (reload_tx, reload_rx) = mpsc::channel(4);
+        let cloudflare = cfg.cloudflare.is_some();
         self.set_error(None);
         self.clear_tunnel_remotes();
-
-        let handle = self.clone();
-        let join = tokio::spawn(async move {
-            let result = handle.run_inner(cfg, config_path, opts, false).await;
+        let (begin, ready) = oneshot::channel::<RunGuard>();
+        let service_cancel = cancel.clone();
+        let join = runtime.spawn(async move {
+            let guard = ready.await?;
+            let result = guard
+                .0
+                .run_inner(cfg, opts, is_foreground, service_cancel, reload_rx)
+                .await;
             if let Err(e) = &result {
                 tracing::error!(error = %e, "client service ended with error");
-                handle.set_error(Some(e.to_string()));
+                guard.0.set_error(Some(e.to_string()));
             }
-            handle.clear_tunnel_remotes();
-            handle.clear_reload_tx();
-            *handle
-                .inner
-                .cancel
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = None;
-            handle.set_status(ClientStatus::Stopped);
-            let _ = result;
+            result
         });
-        *self.inner.join.lock().unwrap_or_else(|e| e.into_inner()) = Some(join);
-        Ok(())
+        *slot = Some(ActiveRun {
+            status: ClientStatus::Starting,
+            cloudflare,
+            cancel,
+            finished: CancellationToken::new(),
+            abort: join.abort_handle(),
+            reload_tx,
+        });
+        drop(slot);
+        begin
+            .send(RunGuard(self.clone()))
+            .map_err(|_| anyhow!("client runtime shut down during start"))?;
+        Ok(join)
     }
 
     pub fn start(&self, cfg: ClientConfig, config_path: PathBuf) -> Result<()> {
@@ -263,53 +292,29 @@ impl ClientHandle {
 
     async fn run_inner(
         &self,
-        mut cfg: ClientConfig,
-        config_path: PathBuf,
+        cfg: ClientConfig,
         opts: StartOptions,
         is_foreground: bool,
+        cancel: CancellationToken,
+        mut reload_rx: mpsc::Receiver<ReloadRequest>,
     ) -> Result<()> {
-        cfg.prepare_runtime(&config_path);
-        cfg.validate()?;
-
-        let cancel = if is_foreground {
-            let token = CancellationToken::new();
-            *self.inner.cancel.lock().unwrap_or_else(|e| e.into_inner()) = Some(token.clone());
-            token
-        } else {
-            self.inner
-                .cancel
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone()
-                .ok_or_else(|| anyhow!("missing cancel token"))?
-        };
-
         let drain_udp = is_foreground && needs_udp_session_drain(&cfg);
-        if drain_udp {
+        let mut helpers = tokio::task::JoinSet::new();
+        if is_foreground && (cfg.cloudflare.is_some() || drain_udp) {
             let token = cancel.clone();
-            tokio::spawn(async move {
-                if wait_termination_signal().await {
-                    tracing::info!("termination signal received; draining udp session");
-                    token.cancel();
+            helpers.spawn(async move {
+                tokio::select! {
+                    _ = token.cancelled() => {},
+                    received = wait_termination_signal() => if received { token.cancel(); },
                 }
             });
         }
-
-        if is_foreground {
-            self.set_status(ClientStatus::Starting);
-            self.set_error(None);
-            self.clear_tunnel_remotes();
-        }
-
-        let (reload_tx, mut reload_rx) = mpsc::channel(4);
-        self.set_reload_tx(reload_tx);
-        let shared_cfg = Arc::new(RwLock::new(cfg.clone()));
 
         if opts.local_control {
             let socket_path = local_control::default_socket_path();
             let hc = self.clone();
             let cc = cancel.clone();
-            tokio::spawn(async move {
+            helpers.spawn(async move {
                 if let Err(e) = local_control::serve(socket_path, hc, cc).await {
                     tracing::warn!(error = %e, "local control socket stopped");
                 }
@@ -337,56 +342,51 @@ impl ClientHandle {
             Arc::new(move || h.clear_tunnel_remotes())
         };
 
-        let result = Service::new(cfg)
-            .run(
-                cancel.clone(),
-                &mut reload_rx,
-                shared_cfg,
-                on_status,
-                on_log,
-                on_tunnel_remote,
-                on_tunnel_removed,
-                on_remotes_clear,
-            )
-            .await;
+        let result = if cfg.cloudflare.is_some() {
+            crate::cloudflare::run_service(cfg, self.clone(), cancel.clone(), &mut reload_rx).await
+        } else {
+            let shared_cfg = Arc::new(RwLock::new(cfg.clone()));
+            Service::new(cfg)
+                .run(
+                    cancel.clone(),
+                    &mut reload_rx,
+                    shared_cfg,
+                    on_status,
+                    on_log,
+                    on_tunnel_remote,
+                    on_tunnel_removed,
+                    on_remotes_clear,
+                )
+                .await
+        };
 
+        cancel.cancel();
+        while let Some(joined) = helpers.join_next().await {
+            if let Err(error) = joined {
+                tracing::warn!(%error, "client helper stopped");
+            }
+        }
         if drain_udp {
             sleep(UDP_SESSION_DRAIN).await;
-        }
-
-        if is_foreground {
-            self.clear_tunnel_remotes();
-            self.clear_reload_tx();
-            *self.inner.cancel.lock().unwrap_or_else(|e| e.into_inner()) = None;
-            if let Err(ref e) = result {
-                self.set_error(Some(e.to_string()));
-            }
-            self.set_status(ClientStatus::Stopped);
         }
         result
     }
 
     pub async fn reload(&self, cfg: ClientConfig, config_path: PathBuf) -> Result<ReloadOutcome> {
-        if !self.status().is_active() {
-            bail!("client is not running");
-        }
+        let tx = {
+            let slot = self.inner.run.lock().unwrap_or_else(|e| e.into_inner());
+            let run = slot
+                .as_ref()
+                .ok_or_else(|| anyhow!("client is not running"))?;
+            if run.status == ClientStatus::Stopping {
+                bail!("client is stopping");
+            }
+            if run.cloudflare != cfg.cloudflare.is_some() {
+                bail!("Disconnect before changing connector mode");
+            }
+            run.reload_tx.clone()
+        };
         let _guard = self.inner.reload_lock.lock().await;
-        self.send_reload(cfg, config_path).await
-    }
-
-    pub async fn reload_from_path(&self, path: &Path) -> Result<ReloadOutcome> {
-        let cfg = ClientConfig::load(path)?;
-        self.reload(cfg, path.to_path_buf()).await
-    }
-
-    async fn send_reload(&self, cfg: ClientConfig, config_path: PathBuf) -> Result<ReloadOutcome> {
-        let tx = self
-            .inner
-            .reload_tx
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .ok_or_else(|| anyhow!("reload channel not ready"))?;
         let (reply_tx, reply_rx) = oneshot::channel();
         tx.send(ReloadRequest {
             cfg,
@@ -402,43 +402,28 @@ impl ClientHandle {
         }
     }
 
+    pub async fn reload_from_path(&self, path: &Path) -> Result<ReloadOutcome> {
+        let cfg = ClientConfig::load(path)?;
+        self.reload(cfg, path.to_path_buf()).await
+    }
+
     pub async fn stop(&self) {
-        if matches!(self.status(), ClientStatus::Stopped) {
-            return;
-        }
-        self.set_error(None);
-        self.set_status(ClientStatus::Stopping);
-        if let Some(token) = self
-            .inner
-            .cancel
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
+        let (finished, abort) = {
+            let mut slot = self.inner.run.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(run) = slot.as_mut() else { return };
+            run.status = ClientStatus::Stopping;
+            self.set_error(None);
+            run.cancel.cancel();
+            (run.finished.clone(), run.abort.clone())
+        };
+        if tokio::time::timeout(Duration::from_secs(5), finished.cancelled())
+            .await
+            .is_err()
         {
-            token.cancel();
+            tracing::warn!("client stop timed out after 5s, aborting task");
+            abort.abort();
+            finished.cancelled().await;
         }
-        let join = self
-            .inner
-            .join
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take();
-        if let Some(join) = join {
-            let abort = join.abort_handle();
-            match tokio::time::timeout(std::time::Duration::from_secs(5), join).await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => tracing::warn!(error = %e, "client task join error"),
-                Err(_) => {
-                    tracing::warn!("client stop timed out after 5s, aborting task");
-                    abort.abort();
-                    self.set_status(ClientStatus::Stopped);
-                }
-            }
-        } else {
-            self.set_status(ClientStatus::Stopped);
-        }
-        self.clear_tunnel_remotes();
-        self.clear_reload_tx();
     }
 }
 
@@ -477,5 +462,36 @@ async fn wait_termination_signal() -> bool {
                 false
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn overlapping_stops_wait_for_the_same_run_before_restart() {
+        let path = PathBuf::from("agent.toml");
+        let cfg: ClientConfig = crate::core::config::parse_config_toml(
+            "server='127.0.0.1:1'\ntransport.tls.enable=false",
+            &path,
+        )
+        .unwrap();
+        let handle = ClientHandle::new();
+        handle.start(cfg.clone(), path.clone()).unwrap();
+        let first = handle.stop();
+        let second = handle.stop();
+        tokio::pin!(first, second);
+        assert!(futures_util::poll!(&mut first).is_pending());
+        assert!(futures_util::poll!(&mut second).is_pending());
+        assert_eq!(handle.status(), ClientStatus::Stopping);
+        assert!(handle.start(cfg.clone(), path.clone()).is_err());
+        tokio::join!(first, second);
+        assert_eq!(handle.status(), ClientStatus::Stopped);
+        assert!(handle.last_error().is_none());
+        handle.start(cfg.clone(), path.clone()).unwrap();
+        handle.reload(cfg, path).await.unwrap();
+        handle.stop().await;
+        assert_eq!(handle.status(), ClientStatus::Stopped);
     }
 }

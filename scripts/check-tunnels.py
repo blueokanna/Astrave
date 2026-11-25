@@ -525,6 +525,47 @@ https://localhost:{port} {{
             edge.terminate()
 
 
+def check_ipv6_gateway(bin_dir, work, echo):
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as udp:
+            udp.bind(("::1", 0))
+            udp_port = udp.getsockname()[1]
+    except OSError as error:
+        print(f"IPv6 loopback unavailable, skipping IPv6 gateway test ({error})")
+        return
+    token = secrets.token_hex(16)
+    with socket.socket(socket.AF_INET6) as listener:
+        listener.bind(("::1", 0))
+        control = listener.getsockname()[1]
+    mapped, = ports(1)
+    env = {**os.environ, "ASTRAVE_CONTROL_SOCKET": (
+        rf"\\.\pipe\astrave-test-{token}" if os.name == "nt" else str(work / "v6.sock")
+    )}
+    for proto in ("quic", "kcp"):
+        server = (
+            f'listen="[::1]:{control}"\n{proto}Port={udp_port}\nproxyAddr="{HOST}"\n'
+            f'auth.token="{token}"\n[transport.tls]\nforce=true\ncertFile="server.pem"\n'
+            'keyFile="server.key"\ntrustedCaFile="ca.pem"\n'
+        )
+        client = (
+            f'server="localhost:{udp_port}"\nauth.token="{token}"\ntransport.protocol="{proto}"\n'
+            '[transport.tls]\nserverName="pass.test"\ntrustedCaFile="ca.pem"\n'
+            'certFile="client.pem"\nkeyFile="client.key"\n'
+            f'[[tunnels]]\nname="echo6"\nprotocol="tcp"\nservice="{HOST}:{echo}"\nremotePort={mapped}\n'
+        )
+        with running(bin_dir, work, "astrave-server", server, "v6-server", env) as (gw, _, gwlog), \
+             running(bin_dir, work, "astrave", client, "v6-client", env) as (agent, _, log):
+            try:
+                with ready(mapped, agent, log) as sock:
+                    sock.settimeout(10)
+                    sock.sendall(PAYLOAD)
+                    assert receive(sock, len(PAYLOAD)) == PAYLOAD
+            finally:
+                if gw.poll() is not None:
+                    raise RuntimeError(gwlog.read_text(errors="replace")[-3000:])
+        print(f"{proto} IPv4-to-IPv6 gateway fallback and mTLS echo verified", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binaries", type=Path)
@@ -556,6 +597,7 @@ def main():
         for proto in ["tcp", "websocket", "quic", "kcp"]:
             check(args.binaries.resolve(), work, proto, origins, tls)
             print(proto, "verified", flush=True)
+        check_ipv6_gateway(args.binaries.resolve(), work, origins[0])
         edge = work / "edge"
         edge.mkdir()
         certificates(edge, args.openssl, (("server", "serverAuth"),))

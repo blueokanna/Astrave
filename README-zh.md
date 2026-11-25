@@ -69,6 +69,8 @@ flutter build windows --release
 
 要从另一台主机的回环端口访问 Magpie、sub2api 等服务，可部署发布端、消费端和会合服务。端点互相核对证书指纹，再通过直连转发 TCP 流量。[P2P 配置及 systemd 单元](docs/zh/transport/peer.md)
 
+发布端有可达 IP 时，`astrave p2p` 可通过 QUIC 或 TCP 连接固定的 libp2p 对端。两端各自生成身份并交换 Peer ID。[libp2p 部署](docs/zh/transport/libp2p.md)
+
 ## 部署
 
 本机示例使用明文 TCP。跨主机部署时，在两端配置相同的 `auth.token`，在服务端设置 `transport.tls.force = true` 并提供 `certFile` 和 `keyFile`，在客户端启用 `transport.tls.enable`。客户端默认使用系统信任库校验服务端证书链和名称。使用私有 CA 时，在客户端指定 `transport.tls.trustedCaFile`。在**服务端**设置这个字段会启用客户端证书认证，此时客户端也需要提供证书和私钥。根据要开放的网卡显式配置 `listen` 和 `proxyAddr`。
@@ -77,7 +79,11 @@ Rust 客户端支持 TCP、UDP、HTTP、HTTPS 和 SOCKS5 隧道，传输层可�
 
 浏览器管理面板由 Rust 服务端直接生成。在 `[dashboard]` 中设置回环地址、端口、用户名和密码，即可查看客户端、隧道和流量。需要远程管理时，通过 HTTPS 反向代理访问。
 
-使用 Cloudflare Tunnel 接入网关时，客户端选择 `transport.protocol = "wss"`。公网入口和 Astrave 源站分别校验证书，`cloudflared` 转发到网关的回环监听端口。[Cloudflare Tunnel 配置示例](docs/zh/transport/protocol/websocket.md)
+使用 Cloudflare Tunnel Token 直接发布服务时，在「配置」页选择 **Cloudflare Tunnel**，或使用 `conf/cloudflare.toml`。Astrave 在进程内注册隧道并接收控制台路由配置。[原生连接器用法与兼容范围](docs/zh/cloudflare.md)
+
+`astrave provider` 可以启动已安装的 ngrok、NATAPP 或 Sunny-Ngrok 客户端。已有 ZeroTier 网络和固定 TCP 映射也可以承载 Astrave 连接。[第三方接入](docs/zh/providers.md)
+
+通过已有 Cloudflare Tunnel 接入 Astrave 网关时，客户端仍可选择 `transport.protocol = "wss"`。[WSS 网关配置示例](docs/zh/transport/protocol/websocket.md)
 
 云主机、带鉴权的 WSS 入口和多云 DNS-01 证书可按实际部署产品配置。[云网关与 DNS 证书](docs/zh/cloud.md)
 

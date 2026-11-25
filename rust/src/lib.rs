@@ -3,6 +3,8 @@ extern crate alloc;
 #[cfg(feature = "runtime")]
 pub mod client;
 #[cfg(feature = "runtime")]
+pub mod cloudflare;
+#[cfg(feature = "runtime")]
 pub mod core;
 #[cfg(feature = "http")]
 pub mod http;

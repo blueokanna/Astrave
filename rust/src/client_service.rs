@@ -58,6 +58,7 @@ impl Service {
 
         let mut first_attempt = true;
         let mut backoff_secs = RECONNECT_BASE_SECS;
+        let mut address_attempt = 0usize;
         let mut pending_reload_reply: Option<PendingReloadReply> = None;
 
         loop {
@@ -92,6 +93,7 @@ impl Service {
                 res = Control::open_session(
                     Arc::clone(&cfg),
                     session_id.clone(),
+                    address_attempt,
                     connect_cancel,
                     || {
                         on_status(ClientStatus::Running);
@@ -122,6 +124,7 @@ impl Service {
                     tracing::warn!(error = %e, "connect failed, retrying");
                     on_status(ClientStatus::Reconnecting);
                     first_attempt = false;
+                    address_attempt = address_attempt.wrapping_add(1);
                     let delay = backoff_secs;
                     on_log(format!("INFO  retrying in {delay}s"));
 

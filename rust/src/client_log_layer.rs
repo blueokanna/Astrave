@@ -25,7 +25,7 @@ where
             return;
         }
         let target = meta.target();
-        if !target.starts_with("astrave_desktop") {
+        if !target.starts_with("astrave_desktop") && !target.starts_with("libcfd") {
             return;
         }
 

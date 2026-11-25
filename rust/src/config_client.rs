@@ -5,6 +5,8 @@ use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientConfig {
+    #[serde(default)]
+    pub cloudflare: Option<crate::cloudflare::Config>,
     #[serde(default = "default_server")]
     pub server: String,
 
@@ -431,6 +433,9 @@ impl ClientConfig {
     }
 
     fn resolve_paths(&mut self, base: &Path) {
+        if let Some(config) = &mut self.cloudflare {
+            config.resolve_paths(base);
+        }
         self.transport.ws_trusted_ca_file =
             super::resolve_maybe_relative(base, &self.transport.ws_trusted_ca_file);
         let tls = &mut self.transport.tls;
@@ -486,6 +491,13 @@ impl ClientConfig {
 
     pub fn validate(&self) -> anyhow::Result<()> {
         self.log.validate()?;
+        if let Some(config) = &self.cloudflare {
+            anyhow::ensure!(
+                self.tunnels.is_empty(),
+                "Cloudflare mode uses the dashboard ingress routes; remove [[tunnels]]"
+            );
+            return config.validate();
+        }
         if self.server.trim().is_empty() {
             return Err(anyhow!("server is required (host:port)"));
         }
@@ -498,7 +510,17 @@ impl ClientConfig {
         if port == 0 {
             return Err(anyhow!("server port must be > 0"));
         }
-        let wss = self.protocol()? == crate::core::transport::Protocol::Wss;
+        let protocol = self.protocol()?;
+        let wss = protocol == crate::core::transport::Protocol::Wss;
+        let tls = &self.transport.tls;
+        if tls.enable || protocol == crate::core::transport::Protocol::Quic {
+            anyhow::ensure!(
+                tls.cert_file.trim().is_empty() == tls.key_file.trim().is_empty(),
+                "transport.tls.certFile and keyFile must be configured together"
+            );
+            rustls::pki_types::ServerName::try_from(self.tls_server_name())
+                .map_err(|_| anyhow!("invalid transport.tls.serverName"))?;
+        }
         if wss && !self.transport.tls.enable {
             return Err(anyhow!(
                 "wss requires transport.tls.enable=true for the Astrave origin"
@@ -689,7 +711,10 @@ impl ClientConfig {
     pub fn tls_server_name(&self) -> String {
         let sn = self.transport.tls.server_name.trim();
         if sn.is_empty() {
-            self.server_host().unwrap_or_else(|_| "localhost".into())
+            self.server_host()
+                .unwrap_or_else(|_| "localhost".into())
+                .trim_matches(['[', ']'])
+                .to_owned()
         } else {
             sn.to_string()
         }
@@ -722,6 +747,9 @@ impl ClientConfig {
     }
 
     pub fn connection_settings_eq(&self, other: &Self) -> bool {
+        if self.cloudflare != other.cloudflare {
+            return false;
+        }
         self.server == other.server
             && self.user == other.user
             && self.agent_id == other.agent_id

@@ -13,6 +13,7 @@ import 'activity.dart';
 import 'android_profile.dart';
 import 'android_tls.dart';
 import 'certificates.dart';
+import 'cloudflare.dart';
 import 'design.dart';
 import 'desktop_tray.dart';
 import 'language.dart';
@@ -398,6 +399,16 @@ class _WorkspaceState extends State<Workspace> with WidgetsBindingObserver {
                       notice(await s.reload());
                     }),
             ),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.cloud_outlined),
+            label: const Text('Cloudflare Tunnel'),
+            onPressed: s.active || s.busy
+                ? null
+                : () async {
+                    final source = await cloudflareProfile(context, t);
+                    if (source != null && mounted) editor.text = source;
+                  },
+          ),
           TextButton(
             child: Text(t('Reset connection settings', '重置连接设置')),
             onPressed: () async {

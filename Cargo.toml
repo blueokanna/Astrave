@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["rust"]
+exclude = ["vendor/libcfd", "vendor/libcfd-rpc"]
 
 [profile.release]
 opt-level = 3

@@ -71,13 +71,19 @@ On Windows, launch `app/build/windows/x64/runner/Release/astrave_desktop.exe` on
 
 To reach a service such as Magpie or sub2api through a private loopback port on another host, configure a publisher, a consumer and a rendezvous. Each peer checks the other’s certificate fingerprint before forwarding TCP streams. [Peer configuration and systemd unit](docs/en/transport/peer.md)
 
+When the publisher has a reachable IP, `astrave p2p` can carry a TCP service over libp2p QUIC or TCP. Each endpoint generates an identity and pins the other endpoint’s Peer ID. [libp2p deployment](docs/en/transport/libp2p.md)
+
 The loopback example uses plaintext TCP. For a remote deployment, configure the same `auth.token` on both peers, set `transport.tls.force = true` on the server, and supply its `certFile` and `keyFile`. Enable `transport.tls.enable` on the client. The client verifies the server name and certificate chain using the host trust store by default. Set the client’s `transport.tls.trustedCaFile` for a private CA. Setting that field on the **server** enables client-certificate authentication and requires a corresponding client certificate and key. Choose `listen` and `proxyAddr` explicitly for the interfaces you intend to publish on.
 
 The Rust client supports TCP, UDP, HTTP, HTTPS and SOCKS5 tunnels with TCP, WebSocket, KCP or QUIC transports. See the full client and server examples for protocol-specific options, TLS and multiplexing. [Client configuration](conf/astrave-full.toml) · [Server configuration](conf/astrave-server-full.toml)
 
 The server renders the browser dashboard in Rust. Set a loopback address, port, user and password under `[dashboard]`. Open that address to inspect clients, tunnels and traffic. Use HTTPS through a reverse proxy for remote administration.
 
-To reach the gateway through Cloudflare Tunnel, select `transport.protocol = "wss"` on the client. It authenticates the public edge and the Astrave origin independently. `cloudflared` forwards upgrades to the gateway's loopback listener. [Cloudflare Tunnel configuration](docs/en/transport/protocol/websocket.md)
+To publish services directly with a Cloudflare Tunnel Token, choose **Cloudflare Tunnel** on the Profile page or use `conf/cloudflare.toml`. Astrave registers the tunnel in process and receives dashboard ingress rules. [Native connector usage and compatibility](docs/en/cloudflare.md)
+
+`astrave provider` runs an installed ngrok, NATAPP or Sunny-Ngrok agent. Astrave can also connect over an existing ZeroTier network or fixed TCP mapping. [Third-party connections](docs/en/providers.md)
+
+To reach an Astrave gateway through an existing Cloudflare Tunnel, select `transport.protocol = "wss"`. [WSS gateway configuration](docs/en/transport/protocol/websocket.md)
 
 Configure a cloud VM, authenticated WSS reverse proxy or DNS-01 provider using the deployment guide. [Cloud gateways and DNS certificates](docs/en/cloud.md)
 

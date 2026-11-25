@@ -35,6 +35,8 @@ heartbeatInterval = -1
 
 `server` must point at the server `kcpPort`, and it must not equal `quicPort`.
 
+For an IPv6 gateway, use a hostname or a bracketed address such as `server = "[2001:db8::1]:9529"`. If the gateway hostname resolves to several addresses and the control handshake times out, the client tries another address on reconnect. A rejected login stops the client.
+
 ## Client parameters
 
 | Parameter                     | Required | Default | Description                                                                                          |

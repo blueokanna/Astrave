@@ -11,7 +11,7 @@ mod plugin;
 #[path = "client_reload.rs"]
 mod reload;
 #[path = "client_service.rs"]
-mod service;
+pub(crate) mod service;
 #[path = "client_tunnel.rs"]
 mod tunnel;
 

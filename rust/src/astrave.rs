@@ -2,9 +2,12 @@ use anyhow::Result;
 use astrave_desktop::client::{ClientConfig, ClientHandle, StartOptions, local_control};
 use astrave_desktop::core::logging;
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 mod cloud_cert;
+#[cfg(feature = "p2p")]
+mod p2p;
 mod peer;
+mod provider;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -39,27 +42,54 @@ enum Command {
     Peer,
     /// Introduce a configured pair of peers using their observed UDP addresses.
     Rendezvous,
+    /// Forward a loopback TCP service between two pinned libp2p identities.
+    #[cfg(feature = "p2p")]
+    P2p,
+    /// Create an Ed25519 identity and print its public Peer ID.
+    #[cfg(feature = "p2p")]
+    P2pKeygen {
+        file: PathBuf,
+    },
+    /// Run an installed tunnel provider's agent in the foreground.
+    Provider {
+        #[command(subcommand)]
+        provider: provider::Provider,
+        /// Path to the provider's native executable (default: look it up on PATH).
+        #[arg(long, global = true)]
+        agent: Option<PathBuf>,
+    },
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
-    if matches!(cli.command, Some(Command::Peer | Command::Rendezvous)) {
-        let path = cli
-            .config
+    let profile = || astrave_desktop::client::resolve_client_config_path(cli.config.as_deref());
+    let explicit = || {
+        cli.config
             .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("peer and rendezvous require -c FILE"))?;
-        return peer::run(path, matches!(cli.command, Some(Command::Rendezvous))).await;
-    }
-    let config_path = astrave_desktop::client::resolve_client_config_path(cli.config.as_deref())?;
-
+            .ok_or_else(|| anyhow::anyhow!("supply the endpoint configuration with -c FILE"))
+    };
     match cli.command {
-        None => run(config_path).await,
-        Some(Command::Reload) => reload(config_path).await,
-        Some(Command::Verify) => verify(config_path),
-        Some(Command::CloudCert { action, lego }) => cloud_cert::run(&config_path, action, &lego),
-        Some(Command::Peer | Command::Rendezvous) => unreachable!(),
+        None => block_on(run(profile()?)),
+        Some(Command::Reload) => block_on(reload(profile()?)),
+        Some(Command::Verify) => verify(profile()?),
+        Some(Command::CloudCert { action, lego }) => cloud_cert::run(&profile()?, action, &lego),
+        Some(Command::Peer) => block_on(peer::run(explicit()?, false)),
+        Some(Command::Rendezvous) => block_on(peer::run(explicit()?, true)),
+        #[cfg(feature = "p2p")]
+        Some(Command::P2pKeygen { file }) => {
+            println!("{}", p2p::keygen(&file)?);
+            Ok(())
+        }
+        #[cfg(feature = "p2p")]
+        Some(Command::P2p) => block_on(p2p::run(Path::new(explicit()?))),
+        Some(Command::Provider { provider, agent }) => {
+            provider.run(cli.config.as_deref().map(Path::new), agent.as_deref())
+        }
     }
+}
+
+fn block_on(task: impl Future<Output = Result<()>>) -> Result<()> {
+    tokio::runtime::Runtime::new()?.block_on(task)
 }
 
 async fn run(config_path: PathBuf) -> Result<()> {
@@ -68,8 +98,8 @@ async fn run(config_path: PathBuf) -> Result<()> {
 
     tracing::info!(config = %config_path.display(), "config loaded");
     tracing::info!(
-        server = %cfg.server_endpoint(),
-        protocol = %cfg.transport.protocol,
+        server = %if cfg.cloudflare.is_some() { "Cloudflare Tunnel".to_string() } else { cfg.server_endpoint() },
+        protocol = %cfg.cloudflare.as_ref().map_or(cfg.transport.protocol.as_str(), |c| c.protocol.as_str()),
         tunnels = cfg.tunnels.len(),
         "starting astrave"
     );

@@ -28,9 +28,22 @@ path = "src/docs.rs"
 required-features = ["docs"]
 
 [features]
-default = ["cli"]
+default = ["cli", "p2p"]
 cli = ["runtime", "dep:clap", "dep:uuid"]
+p2p = ["cli", "dep:libp2p", "dep:multistream-select", "dep:tempfile"]
 runtime = [
+    "dep:libcfd",
+    "dep:tokio-tungstenite",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:http",
+    "dep:http-body-util",
+    "dep:bytes",
+    "dep:futures-util",
+    "dep:regex",
+    "dep:percent-encoding",
+    "dep:serde_json",
+    "dep:uuid",
     "dep:libc",
     "dep:async-trait",
     "dep:fast-socks5",
@@ -114,7 +127,13 @@ flutter_rust_bridge = { version = "=2.13.0", optional = true }
 hostname = { version = "0.4", optional = true }
 http = { version = "1", optional = true }
 http-body-util = { version = "0.1", optional = true }
-hyper-util = { version = "0.1", features = ["client-proxy"], optional = true }
+hyper-util = { version = "0.1", features = ["client-proxy", "tokio"], optional = true }
+hyper = { version = "1", features = ["client", "http1"], optional = true }
+libcfd = { path = "../vendor/libcfd", default-features = false, features = ["named-tunnel", "quic-edge", "h2-edge"], optional = true }
+libp2p = { version = "=0.57.1", default-features = false, features = ["ed25519", "noise", "quic", "serde", "tcp", "tokio", "yamux"], optional = true }
+multistream-select = { version = "0.14", optional = true }
+futures-util = { version = "0.3", features = ["io"], optional = true }
+regex = { version = "1", optional = true }
 httparse = { version = "1", optional = true }
 instant-acme = { version = "0.8.5", default-features = false, features = [
     "ring",
@@ -151,6 +170,7 @@ tokio-rustls = { version = "0.26.6", default-features = false, features = [
     "ring",
     "tls12",
 ], optional = true }
+tokio-tungstenite = { version = "0.28", default-features = false, optional = true }
 tokio-util = { version = "0.7.20", features = [
     "io",
     "compat",
@@ -172,6 +192,7 @@ libc = { version = "0.2", optional = true }
 jni = { version = "0.22.4", optional = true }
 
 [dev-dependencies]
+libcfd = { path = "../vendor/libcfd", default-features = false, features = ["quick-tunnel", "named-tunnel", "quic-edge", "h2-edge"] }
 tokio = { version = "1", default-features = false, features = ["test-util"] }
 
 [lints.rust]

@@ -39,7 +39,7 @@ maxIdleTimeout = 30
 maxIncomingStreams = 100000
 ```
 
-`server` 需指向服务端 `quicPort`。
+`server` 使用网关的 `quicPort`。直接填写 IPv6 地址时需加方括号，例如 `server = "[2001:db8::1]:9528"`。域名同时有 IPv4 和 IPv6 记录时，客户端先尝试 IPv4。握手失败后，重连会尝试下一个地址，证书校验仍使用配置的 TLS 服务名。
 
 ## 客户端参数
 

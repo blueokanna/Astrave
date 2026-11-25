@@ -18,41 +18,44 @@ pub trait Connector: Send + Sync {
 }
 
 struct TlsDialOpts {
-    enable: bool,
-    cfg: Arc<RustlsClientConfig>,
-    server_name: String,
+    identity: Option<(Arc<RustlsClientConfig>, String)>,
 }
 
 impl TlsDialOpts {
     fn from_config(cfg: &ClientConfig) -> Result<Self> {
         let tls = &cfg.transport.tls;
-        let rustls_cfg =
-            new_client_tls_config(&tls.cert_file, &tls.key_file, &tls.trusted_ca_file)?;
-        Ok(Self {
-            enable: tls.enable,
-            cfg: rustls_cfg,
-            server_name: cfg.tls_server_name().to_string(),
-        })
+        let identity = if tls.enable {
+            Some((
+                new_client_tls_config(&tls.cert_file, &tls.key_file, &tls.trusted_ca_file)?,
+                cfg.tls_server_name(),
+            ))
+        } else {
+            None
+        };
+        Ok(Self { identity })
     }
 
     async fn maybe_wrap(&self, stream: DynStream) -> Result<DynStream> {
-        if !self.enable {
-            return Ok(stream);
+        match &self.identity {
+            Some((cfg, name)) => client_enable_tls(stream, cfg.clone(), name).await,
+            None => Ok(stream),
         }
-        client_enable_tls(stream, Arc::clone(&self.cfg), &self.server_name).await
     }
 }
 
-pub async fn build_connector(cfg: &ClientConfig) -> Result<Arc<dyn Connector>> {
-    let tls = TlsDialOpts::from_config(cfg)?;
+pub async fn build_connector(
+    cfg: &ClientConfig,
+    address_attempt: usize,
+) -> Result<Arc<dyn Connector>> {
     let keepalive = cfg.transport.tcp_keepalive();
     match cfg.protocol()? {
         Protocol::Tcp => {
+            let tls = TlsDialOpts::from_config(cfg)?;
             if cfg.transport.tcp_mux {
                 let stream = dial_tcp_tls(cfg, &tls, keepalive).await?;
                 tracing::info!(
                     endpoint = %cfg.server_endpoint(),
-                    tls = tls.enable,
+                    tls = cfg.transport.tls.enable,
                     "tcpMux: physical TCP opened, yamux client started"
                 );
                 Ok(Arc::new(YamuxConnector {
@@ -84,7 +87,7 @@ pub async fn build_connector(cfg: &ClientConfig) -> Result<Arc<dyn Connector>> {
                 edge_tls,
                 access: cfg.transport.cloudflare_access.clone(),
                 header_env: cfg.transport.ws_header_env.clone(),
-                tls,
+                tls: TlsDialOpts::from_config(cfg)?,
                 keepalive,
             };
             if cfg.transport.tcp_mux {
@@ -92,7 +95,7 @@ pub async fn build_connector(cfg: &ClientConfig) -> Result<Arc<dyn Connector>> {
                 tracing::info!(
                     endpoint = %cfg.server_endpoint(),
                     protocol = protocol.as_str(),
-                    tls = connector.tls.enable,
+                    tls = cfg.transport.tls.enable,
                     "tcpMux: physical WebSocket opened, yamux client started"
                 );
                 Ok(Arc::new(YamuxConnector {
@@ -103,12 +106,13 @@ pub async fn build_connector(cfg: &ClientConfig) -> Result<Arc<dyn Connector>> {
             }
         }
         Protocol::Kcp => {
-            let addr = resolve_addr(cfg).await?;
+            let addr = resolve_udp_addr(cfg, address_attempt).await?;
+            let tls = TlsDialOpts::from_config(cfg)?;
             if cfg.transport.tcp_mux {
                 let stream = dial_kcp_tls(addr, &tls).await?;
                 tracing::info!(
                     %addr,
-                    tls = tls.enable,
+                    tls = cfg.transport.tls.enable,
                     "tcpMux: physical KCP opened, yamux client started"
                 );
                 Ok(Arc::new(YamuxConnector {
@@ -119,7 +123,7 @@ pub async fn build_connector(cfg: &ClientConfig) -> Result<Arc<dyn Connector>> {
             }
         }
         Protocol::Quic => {
-            let addr = resolve_addr(cfg).await?;
+            let addr = resolve_udp_addr(cfg, address_attempt).await?;
             let t = &cfg.transport.tls;
             let session = QuicSession::dial(
                 addr,
@@ -155,9 +159,21 @@ async fn dial_kcp_tls(addr: SocketAddr, tls: &TlsDialOpts) -> Result<DynStream> 
     tls.maybe_wrap(stream).await
 }
 
-async fn resolve_addr(cfg: &ClientConfig) -> Result<SocketAddr> {
-    let endpoint = cfg.server_endpoint();
-    crate::core::net::resolve_endpoint(&endpoint, cfg.server_port()?).await
+async fn resolve_udp_addr(cfg: &ClientConfig, attempt: usize) -> Result<SocketAddr> {
+    let port = cfg.server_port()?;
+    let mut addresses: Vec<_> = crate::core::net::resolve_host(&cfg.server_host()?)
+        .await?
+        .into_iter()
+        .map(|ip| SocketAddr::new(ip, port))
+        .collect();
+    // Stable ordering prevents a rotating DNS answer from repeating a failed IP.
+    addresses.sort_unstable();
+    addresses.dedup();
+    let index = attempt.checked_rem(addresses.len()).unwrap_or(0);
+    crate::core::net::ordered_addresses(&addresses, true)
+        .nth(index)
+        .copied()
+        .ok_or_else(|| anyhow::anyhow!("no gateway addresses"))
 }
 
 struct YamuxConnector {
